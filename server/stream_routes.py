@@ -1,105 +1,112 @@
-from fastapi import APIRouter, HTTPException, Request
+import time
+import hmac
+import hashlib
+from fastapi import APIRouter, HTTPException, Request, Query, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from config import Config
 from motor.motor_asyncio import AsyncIOMotorClient
 from utils import TgFileStreamer
 from bot_client import bot
-import logging
-import math
+from bot.clone import RUNNING_CLONES
 
 router = APIRouter()
 db = AsyncIOMotorClient(Config.MONGO_URL).TelegramBotCluster
 files_col = db.large_files
 
-# --- Helper Function for File Size ---
-def human_readable_size(size, decimal_places=2):
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size < 1024.0:
-            break
-        size /= 1024.0
-    return f"{size:.{decimal_places}f} {unit}"
+SECRET_KEY = Config.API_HASH 
+LINK_EXPIRY = 3600 
 
-# ==================================================================
-# 1. API ROUTE (Used by Blogger to get file info)
-# ==================================================================
+# --- HELPER: Generate Secure Cloudflare Link ---
+def create_secure_link(unique_id):
+    expires = int(time.time()) + LINK_EXPIRY
+    signature = hmac.new(SECRET_KEY.encode(), f"{unique_id}{expires}".encode(), hashlib.sha256).hexdigest()
+    return f"{Config.URL}/dl/{unique_id}?token={signature}&expires={expires}"
+
+# --- API: Get File Info (Called on Page Load) ---
 @router.get("/api/file/{unique_id}")
 async def get_file_details(unique_id: str):
-    """
-    Returns JSON data about the file. 
-    Blogger JavaScript calls this to fill in the Title, Size, and Download Link.
-    """
     file_data = await files_col.find_one({"unique_id": unique_id})
-    if not file_data:
-        return JSONResponse({"error": "File not found or link expired"}, status_code=404)
+    if not file_data: return JSONResponse({"error": "File not found"}, status_code=404)
 
-    # Convert raw bytes to readable size (e.g., "1.5 GB")
-    readable_size = human_readable_size(file_data.get('file_size', 0))
+    # Check if Password Exists
+    is_locked = bool(file_data.get("password"))
 
-    return JSONResponse({
-        "file_name": file_data.get('file_name', 'Unknown File'),
-        "file_size": readable_size,
-        "mime_type": file_data.get('mime_type', 'application/octet-stream'),
-        # This link points to the Route 2 below
-        "download_url": f"{Config.URL}/dl/{unique_id}"
-    })
+    response = {
+        "file_name": file_data.get('file_name', 'Unknown'),
+        "file_size": file_data.get('file_size', 0),
+        "is_locked": is_locked  # Tell frontend it's locked
+    }
 
-# ==================================================================
-# 2. STREAM ROUTE (The actual download logic)
-# ==================================================================
-@router.get("/dl/{unique_id}")
-async def stream_handler(unique_id: str, request: Request):
-    """
-    Streams the file from Telegram to the user's browser.
-    Supports 'Range' headers for video seeking.
-    """
-    # A. Find file in DB
-    file_data = await files_col.find_one({"unique_id": unique_id})
-    if not file_data:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # B. Get the Message Object from Log Channel
-    # We fetch the message fresh to get a valid file_id (they expire over time)
-    try:
-        msg = await bot.get_messages(Config.LOG_CHANNEL, file_data['message_id'])
-        media = msg.document or msg.video or msg.audio
-        if not media:
-            raise Exception("Message found but contains no media.")
-    except Exception as e:
-        logging.error(f"Failed to fetch message for {unique_id}: {e}")
-        raise HTTPException(status_code=500, detail="File lost in Telegram Log Channel")
-
-    # C. Setup Headers for Browser (Range support allows seeking!)
-    file_size = file_data['file_size']
-    range_header = request.headers.get("Range")
+    # If NOT locked, give the link immediately
+    if not is_locked:
+        response["download_url"] = create_secure_link(unique_id)
     
-    start, end = 0, file_size - 1
-    if range_header:
-        # Parse range header "bytes=100-200"
-        try:
-            parts = range_header.replace("bytes=", "").split("-")
-            start = int(parts[0]) if parts[0] else 0
-            if len(parts) > 1 and parts[1]:
-                end = int(parts[1])
-        except ValueError:
-            pass # Fallback to default start/end if header is malformed
+    return JSONResponse(response)
 
-    # D. Start Streaming
-    # We pass the bot client and the file_id to our custom streamer
-    return StreamingResponse(
-        TgFileStreamer(bot, media.file_id, start_offset=start),
-        status_code=206 if range_header else 200,
-        headers={
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
+# --- API: Verify Password (Called when user types password) ---
+@router.post("/api/verify_password")
+async def verify_password(payload: dict = Body(...)):
+    unique_id = payload.get("id")
+    user_pass = payload.get("password")
+
+    file_data = await files_col.find_one({"unique_id": unique_id})
+    if not file_data: return JSONResponse({"error": "File not found"}, status_code=404)
+
+    correct_pass = file_data.get("password")
+
+    if user_pass == correct_pass:
+        return JSONResponse({
+            "success": True,
+            "download_url": create_secure_link(unique_id)
+        })
+    else:
+        return JSONResponse({"success": False, "error": "❌ Wrong Password"}, status_code=401)
+
+# --- API: Stream File (The Download) ---
+@router.get("/dl/{unique_id}")
+async def stream_handler(unique_id: str, request: Request, token: str = Query(None), expires: int = Query(None)):
+    # 1. Security Checks
+    message = f"{unique_id}{expires}"
+    expected = hmac.new(SECRET_KEY.encode(), message.encode(), hashlib.sha256).hexdigest()
+    
+    if not hmac.compare_digest(expected, token or "") or int(time.time()) > int(expires or 0):
+        raise HTTPException(status_code=403, detail="❌ Link Expired or Invalid")
+
+    # 2. Get File Data
+    file_data = await files_col.find_one({"unique_id": unique_id})
+    if not file_data: raise HTTPException(status_code=404, detail="File not found")
+
+    # 3. Select Client (Main or Clone)
+    owner_bot_id = file_data.get("bot_id")
+    if owner_bot_id and owner_bot_id in RUNNING_CLONES:
+        active_client = RUNNING_CLONES[owner_bot_id]["client"]
+        target_channel = RUNNING_CLONES[owner_bot_id]["log_channel"]
+    else:
+        active_client = bot
+        target_channel = int(Config.LOG_CHANNEL)
+
+    try:
+        msg = await active_client.get_messages(target_channel, int(file_data['message_id']))
+        media = msg.document or msg.video or msg.audio
+        
+        # 4. Stream with Range Support
+        streamer = TgFileStreamer(
+            active_client, media.file_id, file_data['file_size'], request.headers.get("range")
+        )
+        response_size = (streamer.end - streamer.start) + 1
+        
+        headers = {
             "Accept-Ranges": "bytes",
-            "Content-Length": str(end - start + 1),
-            "Content-Type": file_data['mime_type'],
-            "Content-Disposition": f'attachment; filename="{file_data["file_name"]}"'
+            "Content-Length": str(response_size),
+            "Content-Disposition": f'attachment; filename="{file_data["file_name"]}"',
         }
-    )
+        
+        status_code = 206 if request.headers.get("range") else 200
+        if status_code == 206:
+            headers["Content-Range"] = f"bytes {streamer.start}-{streamer.end}/{file_data['file_size']}"
 
-# ==================================================================
-# 3. HEALTH CHECK (Keeps Render Happy)
-# ==================================================================
-@router.get("/")
-async def health_check():
-    return {"status": "Running", "server": "Blogger-Backend-Mode"}
+        return StreamingResponse(streamer, status_code=status_code, media_type=file_data['mime_type'], headers=headers)
+
+    except Exception as e:
+        print(f"Stream Error: {e}")
+        raise HTTPException(status_code=500, detail="File Stream Failed")
