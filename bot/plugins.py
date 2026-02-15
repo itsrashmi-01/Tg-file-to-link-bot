@@ -1,5 +1,5 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ForceReply
 from config import Config
 from motor.motor_asyncio import AsyncIOMotorClient
 from bot.fsub import get_fsub_status
@@ -7,6 +7,7 @@ from bot.clone import start_clone_bot, clones_col, RUNNING_CLONES
 from bot.tinyurl_helper import shorten_url
 import secrets
 import datetime
+import time
 
 # --- Database Setup ---
 db = AsyncIOMotorClient(Config.MONGO_URL).TelegramBotCluster
@@ -16,6 +17,7 @@ users_col = db.large_file_users
 # --- State Management ---
 user_states = {}
 temp_tokens = {}
+password_states = {} # Stores {user_id: unique_id} while waiting for password
 
 # --- Default Bot Image ---
 DEFAULT_PIC = getattr(Config, 'BOT_PIC', "https://i.imgur.com/8Qj8X9L.jpeg")
@@ -93,24 +95,75 @@ async def shortener_toggle_handler(client: Client, query: CallbackQuery):
     await shortener_menu_handler(client, query) # Refresh Menu
 
 # ==================================================================
-# 3. CLONE CONVERSATION (USER PROVIDES CHANNEL)
+# 3. ADVANCED LINK FEATURES (Expiry & Password)
 # ==================================================================
-@Client.on_message(filters.command("clone") & filters.private)
-async def clone_command(client: Client, message: Message):
-    user_id = message.from_user.id
-    user_states[user_id] = "WAITING_FOR_TOKEN"
-    await message.reply_text("🤖 **Create Your Own Bot**\n\nSend your **Bot Token** from @BotFather.\n*(Send /cancel to stop)*")
-
-@Client.on_callback_query(filters.regex("clone_start"))
-async def clone_callback(client: Client, query: CallbackQuery):
-    user_id = query.from_user.id
-    user_states[user_id] = "WAITING_FOR_TOKEN"
-    await query.message.reply_text("🤖 **Create Your Own Bot**\n\nSend your **Bot Token** from @BotFather.\n*(Send /cancel to stop)*")
+@Client.on_callback_query(filters.regex(r"^expiry_menu_"))
+async def expiry_menu(client: Client, query: CallbackQuery):
+    unique_id = query.data.split("_")[-1]
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("1 Hour", callback_data=f"set_exp_{unique_id}_3600"), InlineKeyboardButton("6 Hours", callback_data=f"set_exp_{unique_id}_21600")],
+        [InlineKeyboardButton("1 Day", callback_data=f"set_exp_{unique_id}_86400"), InlineKeyboardButton("1 Week", callback_data=f"set_exp_{unique_id}_604800")],
+        [InlineKeyboardButton("❌ Remove Expiry", callback_data=f"set_exp_{unique_id}_0")]
+    ])
+    
+    await query.message.reply_text("⏳ **Select Link Validity:**\nLink will stop working after this time.", reply_markup=buttons)
     await query.answer()
 
+@Client.on_callback_query(filters.regex(r"^set_exp_"))
+async def set_expiry(client: Client, query: CallbackQuery):
+    data_parts = query.data.split("_")
+    unique_id = data_parts[2]
+    seconds = int(data_parts[3])
+    
+    if seconds == 0:
+        await files_col.update_one({"unique_id": unique_id}, {"$unset": {"expiry_date": ""}})
+        msg = "✅ **Expiry Removed.** Link is permanent."
+    else:
+        expiry_date = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+        await files_col.update_one({"unique_id": unique_id}, {"$set": {"expiry_date": expiry_date}})
+        msg = f"✅ **Validity Set!**\nLink expires in: {seconds//3600} Hours."
+    
+    await query.message.edit_text(msg)
+
+@Client.on_callback_query(filters.regex(r"^lock_menu_"))
+async def lock_menu(client: Client, query: CallbackQuery):
+    unique_id = query.data.split("_")[-1]
+    
+    # Store state so we know which file the password is for
+    password_states[query.from_user.id] = unique_id
+    
+    await query.message.reply_text(
+        "🔒 **Set Password**\n\nReply to this message with the password you want to set.\nType `/cancel` to abort.",
+        reply_markup=ForceReply(True)
+    )
+    await query.answer()
+
+# ==================================================================
+# 4. TEXT HANDLER (Clone Wizard + Password Setter)
+# ==================================================================
 @Client.on_message(filters.text & filters.private & ~filters.command(["start", "clone"]))
 async def conversation_handler(client: Client, message: Message):
     user_id = message.from_user.id
+    
+    # --- PASSWORD HANDLER ---
+    if user_id in password_states:
+        if message.text == "/cancel":
+            del password_states[user_id]
+            await message.reply_text("❌ Cancelled.")
+            return
+
+        unique_id = password_states[user_id]
+        password = message.text.strip()
+        
+        # Save password to DB
+        await files_col.update_one({"unique_id": unique_id}, {"$set": {"password": password}})
+        del password_states[user_id]
+        
+        await message.reply_text(f"✅ **Password Set!**\n\n🔑 Password: `{password}`")
+        return
+
+    # --- CLONE HANDLER ---
     state = user_states.get(user_id)
 
     if message.text == "/cancel":
@@ -141,35 +194,25 @@ async def conversation_handler(client: Client, message: Message):
         raw_input = message.text.strip()
         channel_input = None
 
-        # 1. Check if it's a numeric ID
+        # Check format
         if raw_input.lstrip("-").isdigit():
             channel_input = int(raw_input)
-        
-        # 2. Check if it's a Link (t.me/username)
         elif "t.me/" in raw_input or "telegram.me/" in raw_input:
             parts = raw_input.split("/")
-            # Get the last part (username)
-            last_part = parts[-1].split("?")[0] # Remove query params
-            
+            last_part = parts[-1].split("?")[0]
             if "+" in last_part or "joinchat" in parts:
-                await message.reply_text("❌ **Error:** Private Invite Links (with `+`) are not supported.\nPlease use a **Public Channel Link** or the **Channel ID**.")
+                await message.reply_text("❌ **Error:** Private Invite Links not supported.\nPlease use a **Public Channel Link** or the **Channel ID**.")
                 return
-            
             channel_input = f"@{last_part}"
-            
-        # 3. Check if it's a Username (@username)
         elif raw_input.startswith("@"):
             channel_input = raw_input
-            
         else:
-            # Assume it's a username without @
             channel_input = f"@{raw_input}"
 
         # START CLONING
         token = temp_tokens.get(user_id)
         status_msg = await message.reply_text("♻️ **Connecting to Channel...**")
         
-        # Pass the user input (ID or Username) to the clone starter
         bot_info, final_id = await start_clone_bot(token, channel_input)
 
         if not bot_info:
@@ -180,12 +223,11 @@ async def conversation_handler(client: Client, message: Message):
                 "3. If using a link, is the channel **Public**?"
             )
         else:
-            # Save to DB
             await clones_col.update_one(
                 {"user_id": user_id},
                 {"$set": {
                     "token": token,
-                    "log_channel": final_id, # User's own channel
+                    "log_channel": final_id, 
                     "bot_id": bot_info.id,
                     "username": bot_info.username,
                     "name": bot_info.first_name
@@ -193,7 +235,6 @@ async def conversation_handler(client: Client, message: Message):
                 upsert=True
             )
             
-            # Notify Admin (Global Log)
             try:
                 await client.send_message(
                     int(Config.LOG_CHANNEL),
@@ -212,13 +253,16 @@ async def conversation_handler(client: Client, message: Message):
         del temp_tokens[user_id]
 
 # ==================================================================
-# 4. CALLBACK HANDLERS (Profile, Links, Help)
+# 5. CALLBACK HANDLERS (Profile, Links, Help)
 # ==================================================================
 @Client.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
     data = query.data
     user_id = query.from_user.id
     
+    if data.startswith("set_exp_") or data.startswith("expiry_menu_") or data.startswith("lock_menu_"):
+        return # Handled by specific handlers above
+
     if data == "clone_start": pass 
     elif data == "my_profile":
         user = await users_col.find_one({"_id": user_id})
@@ -238,11 +282,12 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await start_handler(client, query.message)
 
 # ==================================================================
-# 5. FILE HANDLER (Auto-Forward + Shortener)
+# 6. FILE HANDLER (Auto-Forward + Shortener + New Buttons)
 # ==================================================================
 @Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def handle_large_file(client: Client, message: Message):
     if user_states.get(message.from_user.id): return
+    if password_states.get(message.from_user.id): return # Don't process file if waiting for password
     if not await get_fsub_status(client, message): return
 
     # --- INTELLIGENT ROUTING ---
@@ -265,9 +310,16 @@ async def handle_large_file(client: Client, message: Message):
     mime_type = getattr(media, 'mime_type', 'video/mp4')
     file_size = getattr(media, 'file_size', 0)
 
+    # Save bot_id so we know which client to use for downloading later
     await files_col.insert_one({
-        "unique_id": unique_id, "user_id": message.from_user.id, "message_id": log_msg.id, 
-        "file_name": file_name, "mime_type": mime_type, "file_size": file_size, "created_at": datetime.datetime.now()
+        "unique_id": unique_id, 
+        "user_id": message.from_user.id, 
+        "message_id": log_msg.id, 
+        "bot_id": client.me.id, 
+        "file_name": file_name, 
+        "mime_type": mime_type, 
+        "file_size": file_size, 
+        "created_at": datetime.datetime.now()
     })
     
     # Generate Link
@@ -285,10 +337,21 @@ async def handle_large_file(client: Client, message: Message):
         else:
             await status_msg.edit("⚠️ Shortener failed, sending normal link.")
 
+    # --- NEW BUTTONS (Share, Validity, Lock) ---
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Share Link", url=f"https://t.me/share/url?url={link}")],
+        [
+            InlineKeyboardButton("⏳ Set Validity", callback_data=f"expiry_menu_{unique_id}"),
+            InlineKeyboardButton("🔒 Lock Link", callback_data=f"lock_menu_{unique_id}")
+        ]
+    ])
+
     await message.reply_text(
         f"✅ **File Secured!**\n\n"
         f"📂 `{file_name}`\n"
         f"💾 `{round(file_size / 1024 / 1024, 2)} MB`\n\n"
-        f"🔗 **Link:** {link}", 
+        f"🔗 **Link:** `{link}`\n\n"
+        f"👇 **Customize your link below:**", 
+        reply_markup=buttons, 
         disable_web_page_preview=True
     )
