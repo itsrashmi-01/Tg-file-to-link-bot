@@ -5,36 +5,44 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 
-# --- CRITICAL: MUST IMPORT CLIENT DIRECTLY HERE ---
-from pyrogram import Client 
+# --- THE FIX: DIRECT PYROGRAM IMPORT ---
+try:
+    from pyrogram import Client
+except ImportError:
+    import sys
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyrogram", "tgcrypto"])
+    from pyrogram import Client
+
+# Local Imports
 from config import Config
 from database.files import file_db
-
-# We import the instance, but we need the Class 'Client' for lifespan to work
-from bot import bot_client 
+from bot import bot_client  # Ensure bot/__init__.py has bot_client = Client(...)
 
 # --- Lifespan Management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🤖 Starting Telegram Bot...")
     try:
-        # Check if bot_client exists and is an instance of Client
         if bot_client:
             await bot_client.start()
-            print(f"✅ Bot Started: @{bot_client.me.username}")
+            print(f"✅ Bot Started Successfully: @{bot_client.me.username}")
         else:
-            print("❌ bot_client instance not found!")
+            print("❌ bot_client instance is missing!")
     except Exception as e:
-        print(f"❌ Failed to start bot: {e}")
+        print(f"❌ Critical Error during Bot Startup: {e}")
     
-    yield  # Application logic runs here
+    yield  # Web Server is active now
     
     print("😴 Shutting down...")
-    if bot_client and bot_client.is_connected:
-        await bot_client.stop()
+    try:
+        if bot_client and bot_client.is_connected:
+            await bot_client.stop()
+    except:
+        pass
 
-# --- FastAPI App Setup ---
-app = FastAPI(title="Ultimate TG Bot", lifespan=lifespan)
+# --- FastAPI Setup ---
+app = FastAPI(title="Pro File Link Bot", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,7 +55,7 @@ app.add_middleware(
 
 @app.get("/")
 async def health():
-    return {"status": "alive", "msg": "API is working"}
+    return {"status": "online", "bot_ready": bot_client.is_connected if bot_client else False}
 
 @app.get("/api/info/{hash_id}")
 async def get_info(hash_id: str):
@@ -70,18 +78,14 @@ async def stream_file(hash_id: str):
         raise HTTPException(status_code=404)
 
     async def streamer():
-        # Using the bot_client instance to stream
         async for chunk in bot_client.stream_media(file_data["file_id"]):
             yield chunk
 
     return StreamingResponse(
         streamer(),
         media_type=file_data.get("mime_type", "application/octet-stream"),
-        headers={
-            "Content-Disposition": f'attachment; filename="{file_data["file_name"]}"'
-        }
+        headers={"Content-Disposition": f'attachment; filename="{file_data["file_name"]}"'}
     )
 
 if __name__ == "__main__":
-    # Ensure port is handled correctly for Render
     uvicorn.run("main:app", host="0.0.0.0", port=Config.PORT)
