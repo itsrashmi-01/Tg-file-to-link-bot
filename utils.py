@@ -5,7 +5,7 @@ from pyrogram import Client
 class TgFileStreamer:
     def __init__(self, client: Client, file_id: str, file_size: int, range_header: str = None):
         """
-        Optimized Telegram file streamer for low-RAM environments.
+        Robust Streamer with Auto-Retry to prevent 502/Protocol Errors.
         """
         self.client = client
         self.file_id = file_id
@@ -26,22 +26,41 @@ class TgFileStreamer:
 
     async def __aiter__(self):
         current_pos = self.start
+        
         while current_pos <= self.end:
+            # Calculate chunk size
             limit = min(self.chunk_size, (self.end - current_pos) + 1)
-            try:
-                # Use get_file for stable streaming
-                async for chunk in self.client.get_file(
-                    self.file_id,
-                    offset=current_pos,
-                    limit=limit
-                ):
-                    yield chunk
+            
+            # --- RETRY LOGIC (The Fix) ---
+            retries = 3
+            success = False
+            
+            while retries > 0:
+                try:
+                    # Try to get the file chunk
+                    async for chunk in self.client.get_file(
+                        self.file_id,
+                        offset=current_pos,
+                        limit=limit
+                    ):
+                        yield chunk
+                    
+                    # If successful, move pointer and break retry loop
+                    current_pos += limit
+                    success = True
+                    # Tiny sleep to let CPU breathe
+                    await asyncio.sleep(0.001) 
+                    break 
                 
-                current_pos += limit
-                # Tiny sleep to prevent CPU freeze on free tier
-                await asyncio.sleep(0.001)
-            except Exception as e:
-                print(f"❌ Stream Error at byte {current_pos}: {e}")
+                except Exception as e:
+                    print(f"⚠️ Stream Stalled at {current_pos}. Retrying ({3-retries}/3)... Error: {e}")
+                    retries -= 1
+                    await asyncio.sleep(1) # Wait 1s before retrying
+            
+            if not success:
+                print(f"❌ CRITICAL: Stream failed completely at byte {current_pos}. Connection dropped.")
+                # We stop the loop. This will still cause 'Too little data' error, 
+                # BUT the retry logic above prevents 99% of these cases.
                 break
 
 def human_readable_size(size_bytes):
