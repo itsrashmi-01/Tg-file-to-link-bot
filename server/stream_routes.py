@@ -69,4 +69,26 @@ async def stream_file(unique_id: str, request: Request):
         # Initialize Streamer with String ID
         streamer = TgFileStreamer(
             client, 
-            media.file_id
+            media.file_id, 
+            file_data['file_size'], 
+            request.headers.get("range")
+        )
+        
+        # HEADERS (Crucial Changes Here)
+        headers = {
+            "Content-Disposition": f'attachment; filename="{file_data["file_name"]}"',
+            "Accept-Ranges": "bytes"
+        }
+        
+        # We REMOVED 'Content-Length' to prevent crashing.
+        
+        return StreamingResponse(
+            streamer, 
+            status_code=206 if request.headers.get("range") else 200, 
+            media_type=file_data.get('mime_type', 'application/octet-stream'), 
+            headers=headers
+        )
+
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(500, "Server Error")
