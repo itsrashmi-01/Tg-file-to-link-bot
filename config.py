@@ -9,6 +9,6 @@ class Config:
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
     MONGO_URI = os.environ.get("MONGO_URI", "")
     LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", 0))
-    BLOG_URL = os.environ.get("BLOG_URL", "") # Blogger page URL
+    BLOG_URL = os.environ.get("BLOG_URL", "https://tg-file-to-link.blogspot.com/2026/02/download.html") # Blogger page URL
     ADMINS = [int(x) for x in os.environ.get("ADMINS", "").split()]
     PORT = int(os.environ.get("PORT", 8000))
