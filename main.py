@@ -1,38 +1,40 @@
 import uvicorn
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 
-# --- CRITICAL IMPORTS ---
-from pyrogram import Client  # <--- THIS MUST BE HERE
+# --- CRITICAL: MUST IMPORT CLIENT DIRECTLY HERE ---
+from pyrogram import Client 
 from config import Config
-from bot import bot_client
 from database.files import file_db
+
+# We import the instance, but we need the Class 'Client' for lifespan to work
+from bot import bot_client 
 
 # --- Lifespan Management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🤖 Starting Telegram Bot...")
     try:
-        # Start the bot
-        await bot_client.start()
-        print(f"✅ Bot Started: @{bot_client.me.username}")
+        # Check if bot_client exists and is an instance of Client
+        if bot_client:
+            await bot_client.start()
+            print(f"✅ Bot Started: @{bot_client.me.username}")
+        else:
+            print("❌ bot_client instance not found!")
     except Exception as e:
         print(f"❌ Failed to start bot: {e}")
     
-    yield  # Application is running
+    yield  # Application logic runs here
     
     print("😴 Shutting down...")
-    try:
-        # Only stop if the bot was actually started
-        if bot_client.is_connected:
-            await bot_client.stop()
-    except:
-        pass
+    if bot_client and bot_client.is_connected:
+        await bot_client.stop()
 
-# --- FastAPI Setup ---
-app = FastAPI(title="Advanced File Bot", lifespan=lifespan)
+# --- FastAPI App Setup ---
+app = FastAPI(title="Ultimate TG Bot", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,7 +47,7 @@ app.add_middleware(
 
 @app.get("/")
 async def health():
-    return {"status": "alive", "info": "Bot & API are connected"}
+    return {"status": "alive", "msg": "API is working"}
 
 @app.get("/api/info/{hash_id}")
 async def get_info(hash_id: str):
@@ -68,6 +70,7 @@ async def stream_file(hash_id: str):
         raise HTTPException(status_code=404)
 
     async def streamer():
+        # Using the bot_client instance to stream
         async for chunk in bot_client.stream_media(file_data["file_id"]):
             yield chunk
 
@@ -80,4 +83,5 @@ async def stream_file(hash_id: str):
     )
 
 if __name__ == "__main__":
+    # Ensure port is handled correctly for Render
     uvicorn.run("main:app", host="0.0.0.0", port=Config.PORT)
