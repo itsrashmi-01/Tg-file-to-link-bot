@@ -27,7 +27,7 @@ class Config:
     BOT_PIC = os.getenv("BOT_PIC", "https://i.imgur.com/8Qj8X9L.jpeg")
 
     # --- LIMITS ---
-    FREE_DAILY_LIMIT = 5       
+    FREE_DAILY_LIMIT = 50       
     FREE_PASSWORD_LIMIT = 10   
     FREE_EXPIRY_LIMIT = 5
     
