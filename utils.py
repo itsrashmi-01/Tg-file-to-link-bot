@@ -6,19 +6,16 @@ from pyrogram.raw.types import InputDocumentFileLocation, InputPhotoFileLocation
 
 class TgFileStreamer:
     def __init__(self, client: Client, file_id: str, file_size: int, range_header: str = None):
-        """
-        Streamer that manually constructs InputFileLocation to bypass Pyrogram errors.
-        """
         self.client = client
         self.file_id = file_id
         self.file_size = file_size
         self.chunk_size = 1024 * 1024  # 1MB
         
-        # 1. Decode the File ID String
+        # Decode File ID
         decoded = FileId.decode(file_id)
         self.dc_id = decoded.dc_id
 
-        # 2. Construct the Location Object based on File Type
+        # Construct Location
         if decoded.file_type in (FileType.DOCUMENT, FileType.VIDEO, FileType.AUDIO, FileType.VOICE, FileType.ANIMATION):
             self.file_location = InputDocumentFileLocation(
                 id=decoded.media_id,
@@ -54,12 +51,12 @@ class TgFileStreamer:
         while current_pos <= self.end:
             limit = min(self.chunk_size, (self.end - current_pos) + 1)
             
-            retries = 3
+            # INCREASED RETRIES TO 10
+            retries = 10 
             success = False
             
             while retries > 0:
                 try:
-                    # RAW API CALL: GetFile
                     r = await self.client.invoke(
                         raw.functions.upload.GetFile(
                             location=self.file_location,
@@ -71,13 +68,11 @@ class TgFileStreamer:
                     
                     if isinstance(r, raw.types.upload.File):
                         chunk = r.bytes
-                    elif isinstance(r, raw.types.upload.FileCdnRedirect):
-                        raise Exception("CDN Redirect not supported")
                     else:
-                        raise Exception(f"Unknown response: {type(r)}")
+                        chunk = b""
 
                     if not chunk:
-                        break # End of file
+                        break 
 
                     yield chunk
                     current_pos += len(chunk)
@@ -86,18 +81,10 @@ class TgFileStreamer:
                     break
                 
                 except Exception as e:
-                    print(f"⚠️ Stream Retry ({3-retries}) at {current_pos}: {e}")
+                    print(f"⚠️ Stream Retry ({10-retries}) at {current_pos}: {e}")
                     retries -= 1
                     await asyncio.sleep(1)
             
             if not success:
                 print(f"❌ Critical Fail at {current_pos}")
                 break
-
-def human_readable_size(size_bytes):
-    if not size_bytes: return "0B"
-    size_name = ("B", "KB", "MB", "GB", "TB")
-    i = int(math.floor(math.log(size_bytes, 1024)))
-    p = math.pow(1024, i)
-    s = round(size_bytes / p, 2)
-    return f"{s} {size_name[i]}"
