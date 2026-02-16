@@ -17,7 +17,7 @@ class Config:
 
     # --- CHANGE THIS TO YOUR RENDER URL ---
     # Example: https://tg-file-bot.onrender.com (No trailing slash)
-    URL = os.getenv("URL", "https://your-app-name.onrender.com") 
+    URL = os.getenv("URL", "https://tg-file-to-link-bot-54ux.onrender.com") 
     
     BLOGGER_URL = os.getenv("BLOGGER_URL", "") 
     
