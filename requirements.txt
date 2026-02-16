@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pyrogram
+tgcrypto
+motor
+python-dotenv
+aiofiles
+dnspython
+pydantic
+requests
+jinja2
