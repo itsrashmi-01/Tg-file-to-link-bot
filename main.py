@@ -1,47 +1,38 @@
 import uvicorn
-import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 
-# --- THE FIX: DIRECT PYROGRAM IMPORT ---
-try:
-    from pyrogram import Client
-except ImportError:
-    import sys
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyrogram", "tgcrypto"])
-    from pyrogram import Client
+# --- CRITICAL: MANDATORY IMPORT AT THE ABSOLUTE TOP ---
+from pyrogram import Client 
 
 # Local Imports
 from config import Config
+from bot import bot_client
 from database.files import file_db
-from bot import bot_client  # Ensure bot/__init__.py has bot_client = Client(...)
 
-# --- Lifespan Management ---
+# --- 1. Lifespan Management (Fixes the Event Loop Error) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🤖 Starting Telegram Bot...")
     try:
-        if bot_client:
-            await bot_client.start()
-            print(f"✅ Bot Started Successfully: @{bot_client.me.username}")
-        else:
-            print("❌ bot_client instance is missing!")
+        # We use the instance imported from 'bot'
+        await bot_client.start()
+        print(f"✅ Bot Started Successfully: @{bot_client.me.username}")
     except Exception as e:
-        print(f"❌ Critical Error during Bot Startup: {e}")
+        print(f"❌ Failed to start bot: {e}")
     
-    yield  # Web Server is active now
+    yield  # The Web Server is now active
     
-    print("😴 Shutting down...")
+    print("😴 Shutting down services...")
     try:
         if bot_client and bot_client.is_connected:
             await bot_client.stop()
     except:
         pass
 
-# --- FastAPI Setup ---
+# --- 2. FastAPI App Setup ---
 app = FastAPI(title="Pro File Link Bot", lifespan=lifespan)
 
 app.add_middleware(
@@ -51,11 +42,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Routes ---
+# --- 3. API Routes ---
 
 @app.get("/")
 async def health():
-    return {"status": "online", "bot_ready": bot_client.is_connected if bot_client else False}
+    # Helper to check if bot is actually connected from your browser
+    is_ready = bot_client.is_connected if bot_client else False
+    return {"status": "online", "bot_connected": is_ready}
 
 @app.get("/api/info/{hash_id}")
 async def get_info(hash_id: str):
