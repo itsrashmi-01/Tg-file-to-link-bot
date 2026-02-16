@@ -1,105 +1,96 @@
-from fastapi import APIRouter, HTTPException, Request
+import time, hmac, hashlib, datetime
+from fastapi import APIRouter, HTTPException, Request, Query, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from config import Config
 from motor.motor_asyncio import AsyncIOMotorClient
 from utils import TgFileStreamer
 from bot_client import bot
-import logging
-import math
+from bot.clone import RUNNING_CLONES
 
 router = APIRouter()
-db = AsyncIOMotorClient(Config.MONGO_URL).TelegramBotCluster
-files_col = db.large_files
 
-# --- Helper Function for File Size ---
-def human_readable_size(size, decimal_places=2):
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size < 1024.0:
-            break
-        size /= 1024.0
-    return f"{size:.{decimal_places}f} {unit}"
+# DUAL DB
+main_client = AsyncIOMotorClient(Config.MONGO_URL)
+main_db = main_client.TelegramBotCluster
+clone_client = AsyncIOMotorClient(Config.CLONE_MONGO_URL)
+clone_db = clone_client.CloneBotCluster
+users_col = main_db.large_file_users
 
-# ==================================================================
-# 1. API ROUTE (Used by Blogger to get file info)
-# ==================================================================
-@router.get("/api/file/{unique_id}")
-async def get_file_details(unique_id: str):
-    """
-    Returns JSON data about the file. 
-    Blogger JavaScript calls this to fill in the Title, Size, and Download Link.
-    """
-    file_data = await files_col.find_one({"unique_id": unique_id})
-    if not file_data:
-        return JSONResponse({"error": "File not found or link expired"}, status_code=404)
+SECRET = Config.API_HASH
 
-    # Convert raw bytes to readable size (e.g., "1.5 GB")
-    readable_size = human_readable_size(file_data.get('file_size', 0))
+async def find_file(uid):
+    f = await main_db.large_files.find_one({"unique_id": uid})
+    if f: return f
+    return await clone_db.large_files.find_one({"unique_id": uid})
 
-    return JSONResponse({
-        "file_name": file_data.get('file_name', 'Unknown File'),
-        "file_size": readable_size,
-        "mime_type": file_data.get('mime_type', 'application/octet-stream'),
-        # This link points to the Route 2 below
-        "download_url": f"{Config.URL}/dl/{unique_id}"
-    })
+def secure_link(uid):
+    exp = int(time.time()) + 3600
+    sig = hmac.new(SECRET.encode(), f"{uid}{exp}".encode(), hashlib.sha256).hexdigest()
+    return f"{Config.URL}/dl/{uid}?token={sig}&expires={exp}"
 
-# ==================================================================
-# 2. STREAM ROUTE (The actual download logic)
-# ==================================================================
-@router.get("/dl/{unique_id}")
-async def stream_handler(unique_id: str, request: Request):
-    """
-    Streams the file from Telegram to the user's browser.
-    Supports 'Range' headers for video seeking.
-    """
-    # A. Find file in DB
-    file_data = await files_col.find_one({"unique_id": unique_id})
-    if not file_data:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # B. Get the Message Object from Log Channel
-    # We fetch the message fresh to get a valid file_id (they expire over time)
-    try:
-        msg = await bot.get_messages(Config.LOG_CHANNEL, file_data['message_id'])
-        media = msg.document or msg.video or msg.audio
-        if not media:
-            raise Exception("Message found but contains no media.")
-    except Exception as e:
-        logging.error(f"Failed to fetch message for {unique_id}: {e}")
-        raise HTTPException(status_code=500, detail="File lost in Telegram Log Channel")
-
-    # C. Setup Headers for Browser (Range support allows seeking!)
-    file_size = file_data['file_size']
-    range_header = request.headers.get("Range")
+@router.get("/api/file/{uid}")
+async def get_info(uid: str):
+    file = await find_file(uid)
+    if not file: return JSONResponse({"error": "Not Found"}, 404)
     
-    start, end = 0, file_size - 1
-    if range_header:
-        # Parse range header "bytes=100-200"
-        try:
-            parts = range_header.replace("bytes=", "").split("-")
-            start = int(parts[0]) if parts[0] else 0
-            if len(parts) > 1 and parts[1]:
-                end = int(parts[1])
-        except ValueError:
-            pass # Fallback to default start/end if header is malformed
+    user = await users_col.find_one({"_id": file["user_id"]})
+    is_prem = False
+    if user and user.get("plan_type") == "premium":
+        if user.get("plan_expiry") and user["plan_expiry"] > datetime.datetime.now(): is_prem = True
+    
+    res = {
+        "file_name": file.get('file_name'), "file_size": file.get('file_size'),
+        "is_locked": bool(file.get("password")), "show_ads": not is_prem
+    }
+    if not res["is_locked"]: res["download_url"] = secure_link(uid)
+    return JSONResponse(res)
 
-    # D. Start Streaming
-    # We pass the bot client and the file_id to our custom streamer
-    return StreamingResponse(
-        TgFileStreamer(bot, media.file_id, start_offset=start),
-        status_code=206 if range_header else 200,
-        headers={
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(end - start + 1),
-            "Content-Type": file_data['mime_type'],
-            "Content-Disposition": f'attachment; filename="{file_data["file_name"]}"'
+@router.post("/api/verify_password")
+async def verify(payload: dict = Body(...)):
+    uid = payload.get("id")
+    file = await find_file(uid)
+    if not file: return JSONResponse({"error": "Not Found"}, 404)
+    
+    if payload.get("password") == file.get("password"):
+        return JSONResponse({"success": True, "download_url": secure_link(uid)})
+    return JSONResponse({"success": False, "error": "Wrong Password"}, 401)
+
+@router.get("/dl/{uid}")
+async def stream(uid: str, request: Request, token: str = Query(None), expires: int = Query(None)):
+    msg = f"{uid}{expires}"
+    expected = hmac.new(SECRET.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, token or "") or int(time.time()) > int(expires or 0):
+        raise HTTPException(403, "Link Expired")
+        
+    file = await find_file(uid)
+    if not file: raise HTTPException(404, "File Not Found")
+    
+    bid = file.get("bot_id")
+    if bid and bid in RUNNING_CLONES:
+        client = RUNNING_CLONES[bid]["client"]
+        chan = int(RUNNING_CLONES[bid]["log_channel"])
+    else:
+        client = bot
+        chan = int(Config.LOG_CHANNEL)
+    
+    try:
+        try: await client.get_chat(chan)
+        except: pass
+        
+        tg_msg = await client.get_messages(chan, int(file['message_id']))
+        media = tg_msg.document or tg_msg.video or tg_msg.audio
+        
+        streamer = TgFileStreamer(client, media.file_id, file['file_size'], request.headers.get("range"))
+        size = (streamer.end - streamer.start) + 1
+        
+        headers = {
+            "Accept-Ranges": "bytes", "Content-Length": str(size),
+            "Content-Disposition": f'attachment; filename="{file["file_name"]}"'
         }
-    )
-
-# ==================================================================
-# 3. HEALTH CHECK (Keeps Render Happy)
-# ==================================================================
-@router.get("/")
-async def health_check():
-    return {"status": "Running", "server": "Blogger-Backend-Mode"}
+        code = 206 if request.headers.get("range") else 200
+        if code == 206: headers["Content-Range"] = f"bytes {streamer.start}-{streamer.end}/{file['file_size']}"
+        
+        return StreamingResponse(streamer, status_code=code, media_type=file['mime_type'], headers=headers)
+    except Exception as e:
+        print(e)
+        raise HTTPException(500, "Stream Failed")

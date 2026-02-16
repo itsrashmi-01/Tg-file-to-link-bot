@@ -1,7 +1,10 @@
-fastapi
-uvicorn
 pyrogram
 tgcrypto
 motor
+fastapi
+uvicorn
 python-dotenv
 aiohttp
+dnspython
+pydantic
+shortuuid

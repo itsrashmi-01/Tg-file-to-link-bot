@@ -1,36 +1,28 @@
-import asyncio
-import uvicorn
+import asyncio, uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import Config
 from bot_client import bot
+from bot.clone import load_all_clones
 from server.stream_routes import router
 
 app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)
 
-async def start_services():
-    print("🚀 Starting Bot...")
-    await bot.start()
+@app.get("/")
+async def health(): return {"status": "active"}
+
+async def start():
+    print(f"🌍 Starting Server on {Config.PORT}...")
+    cfg = uvicorn.Config(app, host="0.0.0.0", port=Config.PORT, timeout_keep_alive=60)
+    server = uvicorn.Server(cfg)
     
-    print(f"🌍 Starting Web Server on port {Config.PORT}...")
-    config = uvicorn.Config(app, host="0.0.0.0", port=Config.PORT)
-    server = uvicorn.Server(config)
+    asyncio.create_task(bot.start())
+    asyncio.create_task(load_all_clones())
+    
     await server.serve()
-    
-    print("🛑 Stopping Bot...")
-    await bot.stop()
 
 if __name__ == "__main__":
-    # The loop was already created in bot_client.py, so we just get it
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(start_services())
+    loop.run_until_complete(start())

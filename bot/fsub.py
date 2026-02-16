@@ -1,37 +1,24 @@
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+
 from pyrogram.errors import UserNotParticipant
 from config import Config
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-async def get_fsub_status(client: Client, message: Message):
-    """
-    Checks if the user has joined the Force Sub Channel.
-    Returns True if joined (or if FSub is disabled), False otherwise.
-    """
-    if not Config.FORCE_SUB_CHANNEL or Config.FORCE_SUB_CHANNEL == 0:
-        return True  # Feature is disabled
-
+async def get_fsub_status(client, message):
+    if not Config.FORCE_SUB_CHANNEL:
+        return True
+    
     user_id = message.from_user.id
     try:
-        # Check if user is a member
-        member = await client.get_chat_member(Config.FORCE_SUB_CHANNEL, user_id)
-        if member.status in ["banned", "kicked"]:
-            await message.reply_text("🚫 **You are banned from using this bot.**")
-            return False
+        await client.get_chat_member(Config.FORCE_SUB_CHANNEL, user_id)
+        return True
     except UserNotParticipant:
-        # User is NOT a member -> Send "Please Join" message
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📢 Join Update Channel", url=Config.FORCE_SUB_LINK)
+        ]])
         await message.reply_text(
-            "⚠️ **Access Denied!**\n\n"
-            "You must join our Update Channel to use this bot.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📢 Join Channel", url=Config.FORCE_SUB_LINK)],
-                [InlineKeyboardButton("🔄 Try Again", url=f"https://t.me/{client.me.username}?start=start")]
-            ])
+            "⚠️ **Access Denied!**\n\nPlease join our update channel to use this bot.",
+            reply_markup=buttons
         )
         return False
-    except Exception as e:
-        # If bot is not admin in that channel, it might fail
-        print(f"FSub Error: {e}")
-        return True # Let them pass if there's an error (fail-safe)
-
-    return True
+    except Exception:
+        return True # Fail open if error

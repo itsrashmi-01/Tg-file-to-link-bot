@@ -4,34 +4,31 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
-    # 1. Telegram API Keys
     API_ID = int(os.getenv("API_ID", "0"))
     API_HASH = os.getenv("API_HASH", "")
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-
-    # 2. Database
-    MONGO_URL = os.getenv("MONGO_URL", "")
+    OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # Your Telegram ID
     
-    # 3. Channels
-    try:
-        LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "0"))
-    except:
-        LOG_CHANNEL = 0
-        
-    try:
-        FORCE_SUB_CHANNEL = int(os.getenv("FORCE_SUB_CHANNEL", "0"))
-    except:
-        FORCE_SUB_CHANNEL = 0
-        
+    # --- DATABASES ---
+    MONGO_URL = os.getenv("MONGO_URL", "")
+    # Separate DB for Clones (Defaults to Main DB if not set)
+    CLONE_MONGO_URL = os.getenv("CLONE_MONGO_URL", MONGO_URL) 
+
+    PORT = int(os.getenv("PORT", 10000))
+    URL = os.getenv("URL", "https://your-worker.workers.dev")
+    BLOGGER_URL = os.getenv("BLOGGER_URL", "") # Optional: Your Blogger URL
+    
+    LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "0"))
+    FORCE_SUB_CHANNEL = int(os.getenv("FORCE_SUB_CHANNEL", "0"))
     FORCE_SUB_LINK = os.getenv("FORCE_SUB_LINK", "")
-
-    # 4. Server Config
-    PORT = int(os.getenv("PORT", 8000))
-    # Your Render URL (No trailing slash)
-    URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
-
-    # 5. Blogger Link (Optional)
-    BLOGGER_URL = os.getenv("BLOGGER_URL", "")
-
-    # 6. Assets
     BOT_PIC = os.getenv("BOT_PIC", "https://i.imgur.com/8Qj8X9L.jpeg")
+
+    # --- PLAN LIMITS ---
+    FREE_DAILY_LIMIT = 5       
+    FREE_PASSWORD_LIMIT = 10   
+    FREE_EXPIRY_LIMIT = 5
+    
+    # --- REFERRAL SETTINGS ---
+    REFERRAL_POINTS = 10       
+    PREMIUM_COST_WEEKLY = 100  
+    PREMIUM_COST_MONTHLY = 300
