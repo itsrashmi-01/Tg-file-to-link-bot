@@ -13,7 +13,7 @@ class Config:
     CLONE_MONGO_URL = os.getenv("CLONE_MONGO_URL", MONGO_URL) 
 
     # REPLACE THIS WITH YOUR RENDER URL
-    URL = os.getenv("URL", "https://your-app.onrender.com") 
+    URL = os.getenv("URL", "https://tg-file-to-link-bot-54ux.onrender.com") 
     
     PORT = int(os.getenv("PORT", 10000))
     LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "0"))
