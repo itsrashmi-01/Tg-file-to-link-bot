@@ -1,10 +1,8 @@
 import asyncio
-# --- FIX START: Create Event Loop for Pyrogram/Python 3.14 ---
 try:
     asyncio.get_running_loop()
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
-# --- FIX END ---
 
 import uvicorn
 from fastapi import FastAPI
@@ -22,21 +20,17 @@ app.include_router(router)
 async def health(): return {"status": "active"}
 
 async def start():
-    print(f"🌍 Starting Server on {Config.PORT}...")
-    # config = uvicorn.Config(app, host="0.0.0.0", port=Config.PORT, timeout_keep_alive=60)
-    # server = uvicorn.Server(config)
+    print(f"🌍 Starting on Port {Config.PORT}")
+    config = uvicorn.Config(app, host="0.0.0.0", port=Config.PORT)
+    server = uvicorn.Server(config)
     
-    # Run Bot & Server together
     await asyncio.gather(
         bot.start(),
         load_all_clones(),
-        uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=Config.PORT)).serve()
+        server.serve()
     )
 
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     loop.run_until_complete(start())
