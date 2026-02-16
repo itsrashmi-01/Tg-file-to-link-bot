@@ -9,28 +9,21 @@ class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     OWNER_ID = int(os.getenv("OWNER_ID", "0"))
     
-    # --- DATABASES ---
     MONGO_URL = os.getenv("MONGO_URL", "")
     CLONE_MONGO_URL = os.getenv("CLONE_MONGO_URL", MONGO_URL) 
 
+    # REPLACE THIS WITH YOUR RENDER URL
+    URL = os.getenv("URL", "https://your-app.onrender.com") 
+    
     PORT = int(os.getenv("PORT", 10000))
-
-    # --- CHANGE THIS TO YOUR RENDER URL ---
-    # Example: https://tg-file-bot.onrender.com (No trailing slash)
-    URL = os.getenv("URL", "https://tg-file-to-link-bot-54ux.onrender.com") 
-    
-    BLOGGER_URL = os.getenv("BLOGGER_URL", "") 
-    
     LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "0"))
     FORCE_SUB_CHANNEL = int(os.getenv("FORCE_SUB_CHANNEL", "0"))
     FORCE_SUB_LINK = os.getenv("FORCE_SUB_LINK", "")
-    BOT_PIC = os.getenv("BOT_PIC", "https://i.imgur.com/8Qj8X9L.jpeg")
-
-    # --- LIMITS ---
-    FREE_DAILY_LIMIT = 50       
-    FREE_PASSWORD_LIMIT = 10   
-    FREE_EXPIRY_LIMIT = 5
     
-    REFERRAL_POINTS = 10       
-    PREMIUM_COST_WEEKLY = 100  
+    FREE_DAILY_LIMIT = 5
+    FREE_EXPIRY_LIMIT = 5
+    FREE_PASSWORD_LIMIT = 10
+    REFERRAL_POINTS = 10
+    PREMIUM_COST_WEEKLY = 100
     PREMIUM_COST_MONTHLY = 300
+    BOT_PIC = "https://i.imgur.com/8Qj8X9L.jpeg"
