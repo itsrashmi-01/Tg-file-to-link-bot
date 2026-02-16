@@ -9,9 +9,10 @@ from bot.clone import RUNNING_CLONES
 
 router = APIRouter()
 
-# DUAL DB CONNECTIONS
+# --- DUAL DB CONNECTIONS ---
 main_client = AsyncIOMotorClient(Config.MONGO_URL)
 main_db = main_client.TelegramBotCluster
+
 clone_client = AsyncIOMotorClient(Config.CLONE_MONGO_URL)
 clone_db = clone_client.CloneBotCluster
 
@@ -30,9 +31,8 @@ async def find_file(unique_id):
     
     return None
 
-# --- HELPER: Generate Simple Public Link ---
+# --- HELPER: Generate Simple Public Link (No Expiry) ---
 def create_public_link(unique_id):
-    # No signature, no expiry - just the direct download path
     return f"{Config.URL}/dl/{unique_id}"
 
 # --- API: Get File Info (Called by Blogger) ---
@@ -80,7 +80,7 @@ async def verify_password(payload: dict = Body(...)):
     else:
         return JSONResponse({"success": False, "error": "❌ Wrong Password"}, status_code=401)
 
-# --- API: Stream File (The Simple Download Endpoint) ---
+# --- API: Stream File (The Download Endpoint) ---
 @router.get("/dl/{unique_id}")
 async def stream_handler(unique_id: str, request: Request):
     # 1. No Security Checks (Permanent Link)
@@ -109,9 +109,10 @@ async def stream_handler(unique_id: str, request: Request):
         if not media: raise Exception("Media not found")
         
         # 5. Initialize Streamer
+        # IMPORTANT: Passing media.file_id (STRING), NOT the object!
         streamer = TgFileStreamer(
             active_client, 
-            media, 
+            media.file_id, 
             file_data['file_size'], 
             request.headers.get("range")
         )
