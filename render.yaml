@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: tg-enterprise-bot
+    name: tg-file-to-link
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
@@ -9,3 +9,4 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.12
+
