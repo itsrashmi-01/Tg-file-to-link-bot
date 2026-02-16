@@ -1,22 +1,40 @@
 import math
 import asyncio
 from pyrogram import Client, raw
-from pyrogram.file_id import FileId
+from pyrogram.file_id import FileId, FileType
+from pyrogram.raw.types import InputDocumentFileLocation, InputPhotoFileLocation
 
 class TgFileStreamer:
     def __init__(self, client: Client, file_id: str, file_size: int, range_header: str = None):
         """
-        Streamer using Raw API to bypass Pyrogram get_file bugs.
+        Streamer that manually constructs InputFileLocation to bypass Pyrogram errors.
         """
         self.client = client
         self.file_id = file_id
         self.file_size = file_size
         self.chunk_size = 1024 * 1024  # 1MB
         
-        # Decode the File ID once to get the location
+        # 1. Decode the File ID String
         decoded = FileId.decode(file_id)
-        self.file_location = decoded.file_location
         self.dc_id = decoded.dc_id
+
+        # 2. Construct the Location Object based on File Type
+        if decoded.file_type in (FileType.DOCUMENT, FileType.VIDEO, FileType.AUDIO, FileType.VOICE, FileType.ANIMATION):
+            self.file_location = InputDocumentFileLocation(
+                id=decoded.media_id,
+                access_hash=decoded.access_hash,
+                file_reference=decoded.file_reference,
+                thumb_size=""
+            )
+        elif decoded.file_type == FileType.PHOTO:
+             self.file_location = InputPhotoFileLocation(
+                id=decoded.media_id,
+                access_hash=decoded.access_hash,
+                file_reference=decoded.file_reference,
+                thumb_size=decoded.thumbnail_source
+            )
+        else:
+            raise ValueError(f"Unsupported file type: {decoded.file_type}")
         
         self.start = 0
         self.end = file_size - 1
@@ -42,7 +60,6 @@ class TgFileStreamer:
             while retries > 0:
                 try:
                     # RAW API CALL: GetFile
-                    # This bypasses the buggy client.get_file() wrapper
                     r = await self.client.invoke(
                         raw.functions.upload.GetFile(
                             location=self.file_location,
@@ -55,10 +72,9 @@ class TgFileStreamer:
                     if isinstance(r, raw.types.upload.File):
                         chunk = r.bytes
                     elif isinstance(r, raw.types.upload.FileCdnRedirect):
-                        # Handle CDN if necessary (rare for private files)
-                        raise Exception("CDN Redirect not supported in simple streamer")
+                        raise Exception("CDN Redirect not supported")
                     else:
-                        raise Exception("Unknown response")
+                        raise Exception(f"Unknown response: {type(r)}")
 
                     if not chunk:
                         break # End of file
@@ -70,7 +86,7 @@ class TgFileStreamer:
                     break
                 
                 except Exception as e:
-                    print(f"⚠️ Stream Retry ({3-retries}): {e}")
+                    print(f"⚠️ Stream Retry ({3-retries}) at {current_pos}: {e}")
                     retries -= 1
                     await asyncio.sleep(1)
             
