@@ -1,39 +1,33 @@
 import uvicorn
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 
-# --- CRITICAL: MANDATORY IMPORT AT THE ABSOLUTE TOP ---
+# --- IMPORT CLIENT DIRECTLY ---
 from pyrogram import Client 
-
-# Local Imports
 from config import Config
-from bot import bot_client
 from database.files import file_db
+from bot import bot_client 
 
-# --- 1. Lifespan Management (Fixes the Event Loop Error) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🤖 Starting Telegram Bot...")
+    print("🤖 Starting services...")
     try:
-        # We use the instance imported from 'bot'
+        # Start the Pyrogram client
         await bot_client.start()
-        print(f"✅ Bot Started Successfully: @{bot_client.me.username}")
+        print("✅ Bot is online and listening!")
     except Exception as e:
-        print(f"❌ Failed to start bot: {e}")
+        print(f"❌ Startup Error: {e}")
     
-    yield  # The Web Server is now active
+    yield 
     
-    print("😴 Shutting down services...")
-    try:
-        if bot_client and bot_client.is_connected:
-            await bot_client.stop()
-    except:
-        pass
+    print("😴 Shutting down...")
+    if bot_client and bot_client.is_connected:
+        await bot_client.stop()
 
-# --- 2. FastAPI App Setup ---
-app = FastAPI(title="Pro File Link Bot", lifespan=lifespan)
+app = FastAPI(title="File Streamer API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,13 +36,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 3. API Routes ---
-
 @app.get("/")
 async def health():
-    # Helper to check if bot is actually connected from your browser
-    is_ready = bot_client.is_connected if bot_client else False
-    return {"status": "online", "bot_connected": is_ready}
+    return {"status": "active", "bot_connected": bot_client.is_connected}
 
 @app.get("/api/info/{hash_id}")
 async def get_info(hash_id: str):
