@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, Query, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from config import Config
 from motor.motor_asyncio import AsyncIOMotorClient
-from utils import TgFileStreamer
+from bot.utils import TgFileStreamer
 from bot_client import bot
 from bot.clone import RUNNING_CLONES, clones_col
 
