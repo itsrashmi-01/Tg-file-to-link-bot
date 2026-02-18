@@ -1,29 +1,46 @@
-import uvicorn
+import asyncio
+from pyrogram import Client
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from bot import bot_client
-from web.routes import router as web_router
+import uvicorn
 from config import Config
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("🤖 Starting services...")
-    await bot_client.start()
-    yield
-    print("😴 Shutting down...")
-    await bot_client.stop()
+# 1. FastAPI App for Render's Health Check
+app = FastAPI()
 
-app = FastAPI(lifespan=lifespan)
+@app.get("/")
+async def health_check():
+    return {"status": "running", "bot": "active"}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 2. Pyrogram Bot Client
+class Bot(Client):
+    def __init__(self):
+        super().__init__(
+            "file_converter",
+            api_id=Config.API_ID,
+            api_hash=Config.API_HASH,
+            bot_token=Config.BOT_TOKEN,
+            plugins=dict(root="bot/plugins")
+        )
 
-app.include_router(web_router)
+    async def start(self):
+        await super().start()
+        print("Bot Started!")
+
+    async def stop(self, *args):
+        await super().stop()
+        print("Bot Stopped!")
+
+# 3. Runner Logic
+async def main():
+    bot = Bot()
+    # Run the bot in the background
+    await bot.start()
+    
+    # Run the Web Server (FastAPI) on the port Render provides
+    config = uvicorn.Config(app, host="0.0.0.0", port=8080)
+    server = uvicorn.Server(config)
+    
+    await server.serve()
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=Config.PORT)
+    asyncio.run(main())
