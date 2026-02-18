@@ -3,6 +3,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from config import Config
+
+# This import triggers the loop creation in bot_client.py
 from bot_client import bot
 from bot.server.stream_routes import router as stream_router
 from bot.clone import load_all_clones
@@ -38,8 +40,8 @@ async def start_services():
 
 if __name__ == "__main__":
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Get the loop that was created in bot_client.py
+        loop = asyncio.get_event_loop()
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
