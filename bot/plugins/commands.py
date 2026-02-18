@@ -1,27 +1,30 @@
 from pyrogram import Client, filters
-from bot import db
+from bot.clone import start_clone, clones_col
 
 @Client.on_message(filters.command("start") & filters.private)
-async def start(client, message):
+async def start_handler(client, message):
     await message.reply_text(
-        "**Main Bot Interface**\n\n"
-        "Send me any file to get a direct download link.\n"
-        "Want your own bot? Use `/clone <bot_token>`"
+        "👋 **Welcome!**\n\n"
+        "Send me any file, and I will generate a direct download link.\n"
+        "To create your own bot, use `/clone <bot_token>`"
     )
 
 @Client.on_message(filters.command("clone") & filters.private)
-async def clone_command(client, message):
+async def clone_handler(client, message):
     if len(message.command) < 2:
-        return await message.reply_text("Usage: `/clone 12345:ABC-DEF...`")
+        return await message.reply_text("usage: `/clone <bot_token>`")
     
     token = message.command[1]
-    user_id = message.from_user.id
+    msg = await message.reply_text("♻️ **Creating Clone...**")
     
-    # Save to DB
-    await db.clones.update_one(
-        {"user_id": user_id},
-        {"$set": {"token": token, "user_id": user_id}},
-        upsert=True
-    )
+    bot_info = await start_clone(token, message.from_user.id)
     
-    await message.reply_text("✅ Clone Saved! Please restart the bot (admin only) or wait for auto-restart.")
+    if bot_info:
+        await clones_col.update_one(
+            {"user_id": message.from_user.id},
+            {"$set": {"token": token, "username": bot_info.username}},
+            upsert=True
+        )
+        await msg.edit(f"✅ **Clone Created!**\nUsername: @{bot_info.username}")
+    else:
+        await msg.edit("❌ **Error:** Invalid Token or Bot already running.")
