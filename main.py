@@ -1,45 +1,63 @@
 import asyncio
-import uvicorn
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+import logging
+import uvloop
+
+# --- FIX START ---
+# We must set the event loop policy and create a loop BEFORE importing Pyrogram
+# because Pyrogram checks for an event loop immediately upon import.
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+# --- FIX END ---
+
+from aiohttp import web
+from pyrogram import idle
+from bot import Bot
+from bot.server import web_server
+from clone_bot import clone_manager
 from config import Config
-from bot_client import bot
-from bot.server.stream_routes import router as stream_router
-from bot.clone import load_all_clones
 
-app = FastAPI()
-app.include_router(stream_router)
-
-@app.get("/")
-async def health_check():
-    return JSONResponse({"status": "running", "bot": "online"})
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 async def start_services():
     print("---------------------------------")
-    print("   Starting FastAPI + Bot        ")
+    print("      Starting Telegram Bot      ")
     print("---------------------------------")
 
     # 1. Start Main Bot
-    await bot.start()
-    me = await bot.get_me()
+    await Bot.start()
+    me = await Bot.get_me()
     print(f"✅ Main Bot Started: @{me.username}")
-
-    # 2. Start Clones
-    await load_all_clones()
-
-    # 3. Start Web Server
-    print(f"🌍 Server running at {Config.BASE_URL}")
-    config = uvicorn.Config(app, host="0.0.0.0", port=Config.PORT)
-    server = uvicorn.Server(config)
-    await server.serve()
     
-    # 4. Cleanup
-    await bot.stop()
+    # 2. Start Clone Bots
+    await clone_manager.start_clones()
+    
+    # 3. Start Web Server
+    app = await web_server()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", Config.PORT)
+    await site.start()
+    print(f"✅ Server Running on Port {Config.PORT}")
+    print(f"🔗 Base URL: {Config.BASE_URL}")
+
+    # Keep running
+    await idle()
+    
+    # Cleanup
+    print("Stopping Services...")
+    await clone_manager.stop_clones()
+    await Bot.stop()
+    print("❌ Bots Stopped")
 
 if __name__ == "__main__":
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # We reuse the loop created at the top
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        logging.error(f"Fatal Error: {e}")
