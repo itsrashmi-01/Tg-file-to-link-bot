@@ -22,3 +22,10 @@ async def start(client, message):
             await message.reply_text("Link expired or invalid.")
     else:
         await message.reply_text("Send me any file and I'll give you a permanent link!")
+
+from pyrogram import Client, filters
+
+@Client.on_message(filters.all)
+async def monitor_messages(client, message):
+    print(f"DEBUG: Received a message of type {message.service if message.service else 'content'} from {message.from_user.id}")
+    # This won't reply to the user, but it WILL show up in your Render logs.
