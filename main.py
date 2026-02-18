@@ -2,6 +2,7 @@ import asyncio
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware  # <--- 1. Import this
 from config import Config
 
 # This import triggers the loop creation in bot_client.py
@@ -10,6 +11,17 @@ from bot.server.stream_routes import router as stream_router
 from bot.clone import load_all_clones
 
 app = FastAPI()
+
+# --- 2. Add this Middleware Section ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows requests from any website (including Blogger)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# --------------------------------------
+
 app.include_router(stream_router)
 
 @app.get("/")
@@ -45,4 +57,3 @@ if __name__ == "__main__":
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
-
