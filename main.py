@@ -1,45 +1,55 @@
 import asyncio
+import os
 from pyrogram import Client
-from fastapi import FastAPI
-import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from config import Config
+import uvicorn
 
-# 1. FastAPI App for Render's Health Check
 app = FastAPI()
+bot = Client(
+    "file_streamer",
+    api_id=Config.API_ID,
+    api_hash=Config.API_HASH,
+    bot_token=Config.BOT_TOKEN,
+    plugins=dict(root="bot/plugins")
+)
 
 @app.get("/")
-async def health_check():
-    return {"status": "running", "bot": "active"}
+async def health():
+    return {"status": "active"}
 
-# 2. Pyrogram Bot Client
-class Bot(Client):
-    def __init__(self):
-        super().__init__(
-            "file_converter",
-            api_id=Config.API_ID,
-            api_hash=Config.API_HASH,
-            bot_token=Config.BOT_TOKEN,
-            plugins=dict(root="bot/plugins")
+@app.get("/download/{msg_id}")
+async def stream_file(msg_id: int):
+    try:
+        # Get message from Log Channel
+        msg = await bot.get_messages(Config.LOG_CHANNEL, msg_id)
+        if not msg or not (msg.document or msg.video or msg.audio):
+            raise HTTPException(status_code=404, detail="File not found")
+
+        file = msg.document or msg.video or msg.audio
+        
+        # Generator function to stream file in chunks
+        async def file_generator():
+            async for chunk in bot.stream_media(msg):
+                yield chunk
+
+        return StreamingResponse(
+            file_generator(),
+            media_type=file.mime_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{file.file_name}"',
+                "Content-Length": str(file.file_size)
+            }
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    async def start(self):
-        await super().start()
-        print("Bot Started!")
-
-    async def stop(self, *args):
-        await super().stop()
-        print("Bot Stopped!")
-
-# 3. Runner Logic
 async def main():
-    bot = Bot()
-    # Run the bot in the background
     await bot.start()
-    
-    # Run the Web Server (FastAPI) on the port Render provides
-    config = uvicorn.Config(app, host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    config = uvicorn.Config(app, host="0.0.0.0", port=port)
     server = uvicorn.Server(config)
-    
     await server.serve()
 
 if __name__ == "__main__":
