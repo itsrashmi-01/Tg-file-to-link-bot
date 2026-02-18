@@ -7,9 +7,15 @@ async def file_handler(client, message):
         # Forward to Log Channel to get a permanent File ID
         log_msg = await message.copy(chat_id=Config.LOG_CHANNEL_ID)
         
-        # Generate Link (Points to FastAPI Stream Route)
-        # We use log_msg.id so we can find it in the channel later
-        stream_link = f"{Config.BASE_URL}/dl/{log_msg.id}"
+        # --- LOGIC TO SWITCH BETWEEN BLOGGER AND DIRECT LINK ---
+        if Config.BLOGGER_URL:
+            # If BLOGGER_URL is set in Render, use that format
+            # Example: https://your-blog.blogspot.com?id=123
+            stream_link = f"{Config.BLOGGER_URL}?id={log_msg.id}"
+        else:
+            # Otherwise, use the standard direct download link
+            # Example: https://your-app.onrender.com/dl/123
+            stream_link = f"{Config.BASE_URL}/dl/{log_msg.id}"
         
         await message.reply_text(
             f"**File Name:** `{message.document.file_name if message.document else 'File'}`\n"
