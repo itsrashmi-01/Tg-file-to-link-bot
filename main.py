@@ -15,8 +15,7 @@ bot = Client(
     api_id=Config.API_ID,
     api_hash=Config.API_HASH,
     bot_token=Config.BOT_TOKEN,
-    plugins=dict(root="bot/plugins"),
-    in_memory=True  # Helpful for Render's ephemeral file system
+    plugins=dict(root="bot/plugins") # Ensure this matches your folder name exactly
 )
 
 @app.get("/")
@@ -66,3 +65,4 @@ if __name__ == "__main__":
         asyncio.run(start_services())
     except KeyboardInterrupt:
         pass
+
