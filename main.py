@@ -1,5 +1,15 @@
 import asyncio
 import logging
+import uvloop
+
+# --- FIX START ---
+# We must set the event loop policy and create a loop BEFORE importing Pyrogram
+# because Pyrogram checks for an event loop immediately upon import.
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+# --- FIX END ---
+
 from aiohttp import web
 from pyrogram import idle
 from bot import Bot
@@ -22,7 +32,7 @@ async def start_services():
     me = await Bot.get_me()
     print(f"✅ Main Bot Started: @{me.username}")
     
-    # 2. Start Clone Bots (Different Interface)
+    # 2. Start Clone Bots
     await clone_manager.start_clones()
     
     # 3. Start Web Server
@@ -44,8 +54,8 @@ async def start_services():
     print("❌ Bots Stopped")
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
     try:
+        # We reuse the loop created at the top
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
