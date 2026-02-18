@@ -1,6 +1,6 @@
 pyrogram
 tgcrypto
 motor
+aiohttp
 python-dotenv
-fastapi
-uvicorn
+uvloop

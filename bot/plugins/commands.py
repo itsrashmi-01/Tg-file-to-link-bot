@@ -1,19 +1,27 @@
 from pyrogram import Client, filters
-from config import Config
+from bot import db
 
 @Client.on_message(filters.command("start") & filters.private)
-async def start_handler(client, message):
-    # Check if there is an argument (e.g., /start 105)
-    if len(message.command) > 1:
-        msg_id = message.command[1]
-        # Instead of sending the link again, just send the file directly
-        try:
-            await client.copy_message(
-                chat_id=message.chat.id,
-                from_chat_id=Config.LOG_CHANNEL,
-                message_id=int(msg_id)
-            )
-        except Exception as e:
-            await message.reply_text(f"Error retrieving file: {e}")
-    else:
-        await message.reply_text("👋 Send me a file to get a high-speed direct download link!")
+async def start(client, message):
+    await message.reply_text(
+        "**Main Bot Interface**\n\n"
+        "Send me any file to get a direct download link.\n"
+        "Want your own bot? Use `/clone <bot_token>`"
+    )
+
+@Client.on_message(filters.command("clone") & filters.private)
+async def clone_command(client, message):
+    if len(message.command) < 2:
+        return await message.reply_text("Usage: `/clone 12345:ABC-DEF...`")
+    
+    token = message.command[1]
+    user_id = message.from_user.id
+    
+    # Save to DB
+    await db.clones.update_one(
+        {"user_id": user_id},
+        {"$set": {"token": token, "user_id": user_id}},
+        upsert=True
+    )
+    
+    await message.reply_text("✅ Clone Saved! Please restart the bot (admin only) or wait for auto-restart.")

@@ -1,68 +1,53 @@
 import asyncio
-import os
-import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from pyrogram import Client
+import logging
+from aiohttp import web
+from pyrogram import idle
+from bot import Bot
+from bot.server import web_server
+from clone_bot import clone_manager
 from config import Config
 
-# 1. Initialize FastAPI
-app = FastAPI()
-
-# 2. Initialize Bot (Don't start it yet)
-bot = Client(
-    "file_streamer",
-    api_id=Config.API_ID,
-    api_hash=Config.API_HASH,
-    bot_token=Config.BOT_TOKEN,
-    plugins=dict(root="bot/plugins") # Ensure this matches your folder name exactly
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
-@app.get("/")
-async def health():
-    return {"status": "active", "info": "High-Speed Streamer Online"}
-
-@app.get("/download/{msg_id}")
-async def stream_file(msg_id: int, request: Request):
-    try:
-        msg = await bot.get_messages(Config.LOG_CHANNEL, msg_id)
-        if not msg or not (msg.document or msg.video or msg.audio):
-            raise HTTPException(status_code=404, detail="File not found")
-
-        file = msg.document or msg.video or msg.audio
-        
-        async def file_generator():
-            async for chunk in bot.stream_media(msg):
-                yield chunk
-
-        return StreamingResponse(
-            file_generator(),
-            media_type=file.mime_type,
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Disposition": f'attachment; filename="{file.file_name}"',
-                "Content-Length": str(file.file_size)
-            }
-        )
-    except Exception as e:
-        print(f"Stream Error: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-
 async def start_services():
-    # Start the Pyrogram Client
-    await bot.start()
-    print("Bot Started Successfully!")
+    print("---------------------------------")
+    print("      Starting Telegram Bot      ")
+    print("---------------------------------")
 
-    # Configure and Start Uvicorn
-    port = int(os.environ.get("PORT", 8080))
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, loop="asyncio")
-    server = uvicorn.Server(config)
-    await server.serve()
+    # 1. Start Main Bot
+    await Bot.start()
+    me = await Bot.get_me()
+    print(f"✅ Main Bot Started: @{me.username}")
+    
+    # 2. Start Clone Bots (Different Interface)
+    await clone_manager.start_clones()
+    
+    # 3. Start Web Server
+    app = await web_server()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", Config.PORT)
+    await site.start()
+    print(f"✅ Server Running on Port {Config.PORT}")
+    print(f"🔗 Base URL: {Config.BASE_URL}")
+
+    # Keep running
+    await idle()
+    
+    # Cleanup
+    print("Stopping Services...")
+    await clone_manager.stop_clones()
+    await Bot.stop()
+    print("❌ Bots Stopped")
 
 if __name__ == "__main__":
-    # This is the critical fix for Python 3.12+ 
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(start_services())
+        loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
-
+    except Exception as e:
+        logging.error(f"Fatal Error: {e}")
