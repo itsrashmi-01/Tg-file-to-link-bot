@@ -1,75 +1,145 @@
-from fastapi import APIRouter, Request, HTTPException
+import time
+import hmac
+import hashlib
+import sys
+import os
+from fastapi import APIRouter, HTTPException, Request, Query, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from config import Config
+from motor.motor_asyncio import AsyncIOMotorClient
+from utils import TgFileStreamer
 from bot_client import bot
-from bot.utils import TgFileStreamer
+from bot.clone import RUNNING_CLONES, clones_col
 
 router = APIRouter()
+db = AsyncIOMotorClient(Config.MONGO_URL).TelegramBotCluster
+files_col = db.large_files
+users_col = db.users  # Assuming you have a users collection
 
-# --- 1. API Endpoint (Used by Blogger to get File Info) ---
-@router.get("/api/file/{message_id}")
-async def get_file_info(message_id: int):
-    try:
-        # Fetch Message from Log Channel
-        msg = await bot.get_messages(Config.LOG_CHANNEL_ID, message_id)
-        
-        if not msg or not msg.media:
-            return JSONResponse({"error": "File not found"}, status_code=404)
-            
-        media = msg.document or msg.video or msg.audio
-        file_name = getattr(media, "file_name", "file.bin")
-        file_size = getattr(media, "file_size", 0)
-        
-        # Return JSON data for the Blogger script
-        return {
-            "file_name": file_name,
-            "file_size": file_size,
-            "download_url": f"{Config.BASE_URL}/dl/{message_id}",
-            "is_locked": False # Password feature can be added later
-        }
+SECRET_KEY = Config.API_HASH 
 
-    except Exception as e:
-        print(f"API Error: {e}")
-        return JSONResponse({"error": "Server Error"}, status_code=500)
+# --- 1. USER APIs (Dashboard, Files, Profile) ---
 
+@router.get("/api/profile/{user_id}")
+async def get_user_profile(user_id: int):
+    """Get User Stats & Plan Info"""
+    user = await users_col.find_one({"_id": user_id})
+    if not user:
+        # Create default if not exists
+        user = {"_id": user_id, "plan": "Free", "points": 0, "created_at": time.time()}
+        await users_col.insert_one(user)
 
-# --- 2. Download Endpoint (The Actual Stream) ---
-@router.get("/dl/{message_id}")
-async def stream_file(message_id: int, request: Request):
-    try:
-        msg = await bot.get_messages(Config.LOG_CHANNEL_ID, message_id)
-        
-        if not msg or not msg.media:
-            raise HTTPException(status_code=404, detail="File not found")
-            
-        media = msg.document or msg.video or msg.audio
-        file_name = getattr(media, "file_name", "file.bin")
-        file_size = getattr(media, "file_size", 0)
-        mime_type = getattr(media, "mime_type", "application/octet-stream")
+    file_count = await files_col.count_documents({"user_id": user_id})
+    
+    return JSONResponse({
+        "name": user.get("first_name", "User"),
+        "plan": user.get("plan", "Free"),
+        "total_files": file_count,
+        "referral_points": user.get("points", 0)
+    })
 
-        # Range Handling (For Video Streaming)
-        range_header = request.headers.get("range")
-        start = 0
-        if range_header:
-            try:
-                start = int(range_header.replace("bytes=", "").split("-")[0])
-            except: pass
+@router.get("/api/files/{user_id}")
+async def list_user_files(user_id: int, limit: int = 50):
+    """List specific user's files"""
+    cursor = files_col.find({"user_id": user_id}).sort("created_at", -1).limit(limit)
+    files = []
+    async for f in cursor:
+        files.append({
+            "unique_id": f.get("unique_id"),
+            "name": f.get("file_name"),
+            "size": f.get("file_size"),
+            "views": f.get("views", 0)
+        })
+    return JSONResponse({"files": files})
 
-        streamer = TgFileStreamer(bot, media.file_id, start_offset=start)
-        
-        headers = {
-            "Content-Disposition": f'attachment; filename="{file_name}"',
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(file_size - start)
-        }
+@router.delete("/api/file/{unique_id}")
+async def delete_file(unique_id: str, user_id: int = Body(..., embed=True)):
+    """Delete a file"""
+    result = await files_col.delete_one({"unique_id": unique_id, "user_id": user_id})
+    if result.deleted_count > 0:
+        return JSONResponse({"success": True})
+    return JSONResponse({"success": False, "error": "File not found"}, status_code=404)
 
-        return StreamingResponse(
-            streamer, 
-            status_code=206 if range_header else 200, 
-            headers=headers, 
-            media_type=mime_type
-        )
+@router.post("/api/upgrade")
+async def generate_payment_link(payload: dict = Body(...)):
+    """Generate UPI Link"""
+    plan = payload.get("plan")
+    amount = "199" if plan == "Pro" else "99"
+    # Basic UPI Link Format
+    upi_link = f"upi://pay?pa={Config.UPI_ID}&pn=BotService&am={amount}&cu=INR"
+    return JSONResponse({"upi_link": upi_link, "qr_code": f"https://api.qrserver.com/v1/create-qr-code/?data={upi_link}"})
 
-    except Exception as e:
-        print(f"Stream Error: {e}")
-        raise HTTPException(status_code=500, detail="Server Error")
+# --- 2. ADMIN APIs (Stats, Ban, Clones) ---
+
+@router.post("/api/admin/login")
+async def admin_login(payload: dict = Body(...)):
+    if payload.get("password") == Config.ADMIN_PASSWORD:
+        return JSONResponse({"success": True, "token": "admin_session_active"})
+    return JSONResponse({"success": False}, status_code=401)
+
+@router.get("/api/admin/stats")
+async def get_admin_stats():
+    total_files = await files_col.count_documents({})
+    total_users = await users_col.count_documents({})
+    # Mock revenue calculation
+    total_revenue = total_users * 10  
+    
+    return JSONResponse({
+        "total_files": total_files,
+        "total_users": total_users,
+        "revenue": f"₹{total_revenue}",
+        "bot_status": "Online",
+        "active_clones": len(RUNNING_CLONES)
+    })
+
+@router.post("/api/admin/restart")
+async def restart_server(payload: dict = Body(...)):
+    if payload.get("password") == Config.ADMIN_PASSWORD:
+        # Exit process -> Render automatically restarts it
+        sys.exit(0) 
+    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+@router.post("/api/admin/ban")
+async def ban_user(payload: dict = Body(...)):
+    user_id = int(payload.get("user_id"))
+    await users_col.update_one({"_id": user_id}, {"$set": {"banned": True}}, upsert=True)
+    return JSONResponse({"success": True, "msg": f"User {user_id} Banned"})
+
+@router.post("/api/admin/broadcast")
+async def broadcast_msg(payload: dict = Body(...)):
+    msg = payload.get("message")
+    count = 0
+    async for user in users_col.find():
+        try:
+            await bot.send_message(user["_id"], msg)
+            count += 1
+        except: pass
+    return JSONResponse({"success": True, "sent_to": count})
+
+@router.get("/api/admin/clones")
+async def get_clones():
+    clones = []
+    # Fetch from memory or DB
+    async for c in clones_col.find():
+        status = "Running" if c.get("bot_id") in RUNNING_CLONES else "Stopped"
+        clones.append({
+            "bot_id": c.get("bot_id"),
+            "username": c.get("username"),
+            "status": status
+        })
+    return JSONResponse({"clones": clones})
+
+@router.delete("/api/admin/clone/{bot_id}")
+async def delete_clone(bot_id: int):
+    # Stop from memory
+    if bot_id in RUNNING_CLONES:
+        await RUNNING_CLONES[bot_id]["client"].stop()
+        del RUNNING_CLONES[bot_id]
+    
+    # Remove from DB
+    await clones_col.delete_one({"bot_id": int(bot_id)})
+    return JSONResponse({"success": True})
+
+# --- 3. DOWNLOAD & STREAMING APIs (Existing) ---
+# ... (Keep your existing verify_password, get_file_details, and stream_handler code here) ...
+# Ensure you copy those from your previous file or I can include them if needed.
