@@ -7,7 +7,7 @@ from bot.utils import is_subscribed, get_tinyurl
 from bot.clone import db
 
 files_col = db.files
-users_col = db.users  # Need this to check settings
+users_col = db.users
 BATCH_DATA = {}
 
 # --- HELPER: Human Readable Size ---
@@ -149,16 +149,23 @@ async def protect_callback(client, callback_query):
 async def validity_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
     
+    # Updated Buttons with BACK function
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("30 Mins", callback_data=f"settime_{file_id}_30m"), InlineKeyboardButton("1 Hour", callback_data=f"settime_{file_id}_1h")],
         [InlineKeyboardButton("1 Day", callback_data=f"settime_{file_id}_1d"), InlineKeyboardButton("1 Week", callback_data=f"settime_{file_id}_7d")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="close")]
+        [InlineKeyboardButton("🔙 Back", callback_data=f"back_{file_id}")]
     ])
     
     await callback_query.message.edit_text(
         "⏳ **Select Link Validity:**\nLink will stop working after this time.",
         reply_markup=buttons
     )
+
+@Client.on_callback_query(filters.regex(r"^back_"))
+async def back_to_main_callback(client, callback_query):
+    file_id = int(callback_query.data.split("_")[1])
+    # Edit the message back to file info
+    await send_updated_message(client, callback_query.message.chat.id, file_id, message_to_edit=callback_query.message)
 
 @Client.on_callback_query(filters.regex(r"^settime_"))
 async def set_validity_handler(client, callback_query):
@@ -175,8 +182,7 @@ async def set_validity_handler(client, callback_query):
     await files_col.update_one({"log_msg_id": int(file_id)}, {"$set": {"expiry": expiry_time}})
     
     await callback_query.answer("✅ Validity Set!", show_alert=True)
-    await send_updated_message(client, callback_query.message.chat.id, int(file_id))
-    await callback_query.message.delete()
+    await send_updated_message(client, callback_query.message.chat.id, int(file_id), message_to_edit=callback_query.message)
 
 @Client.on_callback_query(filters.regex("close"))
 async def close_cb(client, callback_query):
@@ -216,19 +222,13 @@ async def input_handler(client, message):
 
     await send_updated_message(client, message.chat.id, file_id)
 
-async def send_updated_message(client, chat_id, file_id):
+async def send_updated_message(client, chat_id, file_id, message_to_edit=None):
     file_data = await files_col.find_one({"log_msg_id": file_id})
     if not file_data: return
 
     base_link = f"{Config.BLOGGER_URL}?id={file_id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{file_id}"
     
-    # Check User Settings again for the update
-    user = await users_col.find_one({"user_id": client.me.id}) # Fallback, ideally we need original user ID
-    # Since we can't easily get original user ID here without storing it, 
-    # we'll skip shortening for updates or assume default. 
-    # Better: Store original user_id in file_data!
-    
-    # Fix: Use stored user_id
+    # Check User Settings for TinyURL
     owner_id = file_data.get("user_id")
     user = await users_col.find_one({"user_id": owner_id})
     use_short = user.get("use_short", False) if user else False
@@ -255,8 +255,9 @@ async def send_updated_message(client, chat_id, file_id):
         f"🔗 **Link:**\n`{final_link}`"
     )
 
-    await client.send_message(
-        chat_id,
-        caption,
-        reply_markup=get_file_buttons(file_id, final_link, is_protected)
-    )
+    markup = get_file_buttons(file_id, final_link, is_protected)
+
+    if message_to_edit:
+        await message_to_edit.edit_text(caption, reply_markup=markup)
+    else:
+        await client.send_message(chat_id, caption, reply_markup=markup)
