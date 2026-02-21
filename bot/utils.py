@@ -1,9 +1,7 @@
-import aiohttp
 from pyrogram import Client
 from pyrogram.errors import UserNotParticipant
 from config import Config
 
-# --- EXISTING CODE ---
 class TgFileStreamer:
     def __init__(self, client: Client, file_id: str, start_offset: int = 0):
         self.client = client
@@ -30,12 +28,21 @@ async def is_subscribed(client, user_id):
         print(f"FSub Error: {e}")
         return True
 
-# --- NEW FUNCTION ---
-async def get_tinyurl(long_url):
-    url = f"http://tinyurl.com/api-create.php?url={long_url}"
+# --- NEW: Time Parser ---
+def get_seconds(time_string):
+    """Converts a string like '1h', '10m' to seconds."""
+    get_time = {
+        's': 1,
+        'm': 60,
+        'h': 3600,
+        'd': 86400,
+        'w': 604800,
+        'mo': 2592000
+    }
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                return await response.text()
-    except Exception:
-        return long_url # Fallback to original if failed
+        unit = time_string[-1].lower()
+        if unit not in get_time: return None
+        val = int(time_string[:-1])
+        return val * get_time[unit]
+    except:
+        return None
