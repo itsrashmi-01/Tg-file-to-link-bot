@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from config import Config
-from bot_client import tg_bot # <--- UPDATED
+from bot_client import tg_bot
 from bot.utils import TgFileStreamer
 from bot.clone import db
 
@@ -16,19 +16,23 @@ class PasswordCheck(BaseModel):
 @router.get("/api/file/{message_id}")
 async def get_file_info(message_id: int):
     try:
-        msg = await tg_bot.get_messages(Config.LOG_CHANNEL_ID, message_id) # <--- UPDATED
+        msg = await tg_bot.get_messages(Config.LOG_CHANNEL_ID, message_id)
         if not msg or not msg.media:
             return JSONResponse({"error": "File not found"}, status_code=404)
             
         media = msg.document or msg.video or msg.audio
+        
+        # Default Name
         file_name = getattr(media, "file_name", "file.bin")
         file_size = getattr(media, "file_size", 0)
-        
         is_locked = False
+
+        # Check DB for Custom Name & Password
         if hasattr(media, "file_unique_id"):
             file_data = await files_col.find_one({"file_unique_id": media.file_unique_id})
-            if file_data and file_data.get("password"):
-                is_locked = True
+            if file_data:
+                if file_data.get("password"): is_locked = True
+                if file_data.get("file_name"): file_name = file_data["file_name"] # <--- USE CUSTOM NAME
         
         return {
             "file_name": file_name,
@@ -43,7 +47,7 @@ async def get_file_info(message_id: int):
 @router.post("/api/verify_password")
 async def verify_password(data: PasswordCheck):
     try:
-        msg = await tg_bot.get_messages(Config.LOG_CHANNEL_ID, data.id) # <--- UPDATED
+        msg = await tg_bot.get_messages(Config.LOG_CHANNEL_ID, data.id)
         if not msg or not msg.media:
             return {"success": False, "error": "File not found"}
         
@@ -51,10 +55,7 @@ async def verify_password(data: PasswordCheck):
         file_data = await files_col.find_one({"file_unique_id": media.file_unique_id})
         
         if file_data and file_data.get("password") == data.password:
-            return {
-                "success": True, 
-                "download_url": f"{Config.BASE_URL}/dl/{data.id}?password={data.password}"
-            }
+            return {"success": True, "download_url": f"{Config.BASE_URL}/dl/{data.id}?password={data.password}"}
         
         return {"success": False, "error": "Incorrect Password"}
     except Exception as e:
@@ -64,31 +65,32 @@ async def verify_password(data: PasswordCheck):
 @router.get("/dl/{message_id}")
 async def stream_file(message_id: int, request: Request, password: str = None):
     try:
-        msg = await tg_bot.get_messages(Config.LOG_CHANNEL_ID, message_id) # <--- UPDATED
-        
+        msg = await tg_bot.get_messages(Config.LOG_CHANNEL_ID, message_id)
         if not msg or not msg.media:
             raise HTTPException(status_code=404, detail="File not found")
             
         media = msg.document or msg.video or msg.audio
         
+        # Check DB for Custom Name & Password
+        file_name = getattr(media, "file_name", "file.bin")
         if hasattr(media, "file_unique_id"):
             file_data = await files_col.find_one({"file_unique_id": media.file_unique_id})
-            if file_data and file_data.get("password"):
-                if password != file_data['password']:
+            if file_data:
+                if file_data.get("password") and password != file_data['password']:
                     raise HTTPException(status_code=401, detail="Password Required")
+                if file_data.get("file_name"): 
+                    file_name = file_data["file_name"] # <--- USE CUSTOM NAME
 
-        file_name = getattr(media, "file_name", "file.bin")
         file_size = getattr(media, "file_size", 0)
         mime_type = getattr(media, "mime_type", "application/octet-stream")
 
         range_header = request.headers.get("range")
         start = 0
         if range_header:
-            try:
-                start = int(range_header.replace("bytes=", "").split("-")[0])
+            try: start = int(range_header.replace("bytes=", "").split("-")[0])
             except: pass
 
-        streamer = TgFileStreamer(tg_bot, media.file_id, start_offset=start) # <--- UPDATED
+        streamer = TgFileStreamer(tg_bot, media.file_id, start_offset=start)
         
         headers = {
             "Content-Disposition": f'attachment; filename="{file_name}"',
