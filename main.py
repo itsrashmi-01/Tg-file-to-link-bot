@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import Config
 
 # --- 1. CRITICAL: Initialize Bot & Event Loop FIRST ---
-from bot_client import bot 
+from bot_client import tg_bot # <--- UPDATED IMPORT
 # ------------------------------------------------------
 
 # Import Routers
@@ -14,10 +14,11 @@ from bot.server.auth_routes import router as auth_router
 from bot.server.stream_routes import router as stream_router
 from bot.clone import load_all_clones
 
-# Optional: Force Import plugins to ensure they load (Debugging)
-import bot.plugins.start 
-import bot.plugins.commands
-import bot.plugins.files
+# Optional: Force Import plugins to ensure they load
+# Use 'from ... import' syntax to avoid overwriting the 'bot' variable name
+from bot.plugins import start 
+from bot.plugins import commands
+from bot.plugins import files
 
 app = FastAPI()
 
@@ -31,7 +32,7 @@ app.add_middleware(
 
 # --- 2. REGISTER ROUTES ---
 app.include_router(stream_router)
-app.include_router(auth_router)  # <--- Essential for Login/Start to work
+app.include_router(auth_router)
 # --------------------------
 
 @app.get("/")
@@ -44,8 +45,8 @@ async def start_services():
     print("---------------------------------")
 
     # 1. Start Main Bot
-    await bot.start()
-    me = await bot.get_me()
+    await tg_bot.start() # <--- UPDATED
+    me = await tg_bot.get_me() # <--- UPDATED
     print(f"✅ Main Bot Started: @{me.username}")
 
     # 2. Start Clones
@@ -58,7 +59,7 @@ async def start_services():
     await server.serve()
     
     # 4. Cleanup
-    await bot.stop()
+    await tg_bot.stop() # <--- UPDATED
 
 if __name__ == "__main__":
     try:
