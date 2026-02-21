@@ -2,26 +2,27 @@ import asyncio
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware  
-from bot.server.auth_routes import router as auth_router# <--- 1. Import this
+from fastapi.middleware.cors import CORSMiddleware
 from config import Config
 
-# This import triggers the loop creation in bot_client.py
-from bot_client import bot
+# --- FIX: IMPORT THIS FIRST ---
+# This ensures the event loop is created BEFORE auth_routes imports Pyrogram
+from bot_client import bot 
+# ------------------------------
+
+from bot.server.auth_routes import router as auth_router
 from bot.server.stream_routes import router as stream_router
 from bot.clone import load_all_clones
 
 app = FastAPI()
 
-# --- 2. Add this Middleware Section ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows requests from any website (including Blogger)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# --------------------------------------
 
 app.include_router(stream_router)
 app.include_router(auth_router)
@@ -59,4 +60,3 @@ if __name__ == "__main__":
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
-
