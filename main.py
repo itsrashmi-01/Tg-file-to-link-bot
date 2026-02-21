@@ -5,14 +5,19 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from config import Config
 
-# --- FIX: IMPORT THIS FIRST ---
-# This ensures the event loop is created BEFORE auth_routes imports Pyrogram
+# --- 1. CRITICAL: Initialize Bot & Event Loop FIRST ---
 from bot_client import bot 
-# ------------------------------
+# ------------------------------------------------------
 
+# Import Routers
 from bot.server.auth_routes import router as auth_router
 from bot.server.stream_routes import router as stream_router
 from bot.clone import load_all_clones
+
+# Optional: Force Import plugins to ensure they load (Debugging)
+import bot.plugins.start 
+import bot.plugins.commands
+import bot.plugins.files
 
 app = FastAPI()
 
@@ -24,8 +29,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- 2. REGISTER ROUTES ---
 app.include_router(stream_router)
-app.include_router(auth_router)
+app.include_router(auth_router)  # <--- Essential for Login/Start to work
+# --------------------------
 
 @app.get("/")
 async def health_check():
@@ -55,7 +62,6 @@ async def start_services():
 
 if __name__ == "__main__":
     try:
-        # Get the loop that was created in bot_client.py
         loop = asyncio.get_event_loop()
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
