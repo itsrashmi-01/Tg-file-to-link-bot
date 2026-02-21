@@ -64,9 +64,7 @@ async def process_batch(client, mg_id, chat_id):
         media = msg.document or msg.video or msg.audio
         await save_file_to_db(msg, log_msg, media)
         
-        # Generate Basic Link
         base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
-        # Apply Shortener
         final_link = await get_short_link(base_link)
         
         links_text += f"• [{getattr(media, 'file_name', 'File')}]({final_link})\n"
@@ -78,25 +76,21 @@ async def process_file(client, message):
         log_msg = await message.copy(chat_id=Config.LOG_CHANNEL_ID)
         media = message.document or message.video or message.audio
         
-        # Save to DB
         await save_file_to_db(message, log_msg, media)
 
-        # Generate Links
         base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
         final_link = await get_short_link(base_link)
         
         file_name = getattr(media, "file_name", "file")
         file_size = getattr(media, "file_size", 0)
 
+        # --- SPACED CAPTION ---
         caption = (
             f"✅ **Link Generated!**\n\n"
-            f"📂 **Name:** `{file_name}`\n"
+            f"📂 **Name:** `{file_name}`\n\n"
             f"📦 **Size:** {humanbytes(file_size)}\n\n"
             f"🔗 **Download Link:**\n`{final_link}`"
         )
-
-        # Store Original Message ID in DB to delete later? 
-        # Easier: Just reply. We will track 'log_msg.id' in callbacks to find the DB entry.
         
         await message.reply_text(
             caption,
@@ -124,30 +118,27 @@ async def save_file_to_db(user_msg, log_msg, media):
 @Client.on_callback_query(filters.regex(r"^rename_"))
 async def rename_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
-    # Ask for new name using ForceReply
     await client.send_message(
         callback_query.message.chat.id,
         "📝 **Enter new file name:**",
         reply_markup=ForceReply(selective=True, placeholder=f"rename_{file_id}")
     )
-    await callback_query.message.delete() # Delete old info msg
+    # No delete here, as requested
 
 @Client.on_callback_query(filters.regex(r"^protect_"))
 async def protect_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
-    # Ask for password
     await client.send_message(
         callback_query.message.chat.id,
         "🔒 **Enter password for this link:**",
         reply_markup=ForceReply(selective=True, placeholder=f"protect_{file_id}")
     )
-    await callback_query.message.delete() # Delete old info msg
+    await callback_query.message.delete()
 
 @Client.on_callback_query(filters.regex(r"^validity_"))
 async def validity_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
     
-    # Show Validity Options
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("30 Mins", callback_data=f"settime_{file_id}_30m"), InlineKeyboardButton("1 Hour", callback_data=f"settime_{file_id}_1h")],
         [InlineKeyboardButton("1 Day", callback_data=f"settime_{file_id}_1d"), InlineKeyboardButton("1 Week", callback_data=f"settime_{file_id}_7d")],
@@ -163,7 +154,6 @@ async def validity_callback(client, callback_query):
 async def set_validity_handler(client, callback_query):
     _, file_id, duration = callback_query.data.split("_")
     
-    # Calculate Expiry Timestamp
     seconds = 0
     if duration == "30m": seconds = 1800
     elif duration == "1h": seconds = 3600
@@ -172,7 +162,6 @@ async def set_validity_handler(client, callback_query):
     
     expiry_time = time.time() + seconds
     
-    # Update DB
     await files_col.update_one({"log_msg_id": int(file_id)}, {"$set": {"expiry": expiry_time}})
     
     await callback_query.answer("✅ Validity Set!", show_alert=True)
@@ -183,7 +172,7 @@ async def set_validity_handler(client, callback_query):
 async def close_cb(client, callback_query):
     await callback_query.message.delete()
 
-# --- REPLY HANDLER (Captures input for Rename/Protect) ---
+# --- REPLY HANDLER ---
 
 @Client.on_message(filters.private & filters.reply)
 async def input_handler(client, message):
@@ -191,14 +180,12 @@ async def input_handler(client, message):
     if not reply or not reply.reply_markup or not isinstance(reply.reply_markup, ForceReply):
         return
 
-    # Extract Action & File ID from placeholder
     placeholder = reply.reply_markup.placeholder
     if not placeholder or "_" not in placeholder: return
     
     action, file_id = placeholder.split("_")
     file_id = int(file_id)
     
-    # Fetch File Data
     file_data = await files_col.find_one({"log_msg_id": file_id})
     if not file_data:
         return await message.reply("❌ File not found in DB.")
@@ -211,19 +198,15 @@ async def input_handler(client, message):
     elif action == "protect":
         password = message.text
         await files_col.update_one({"_id": file_data["_id"]}, {"$set": {"password": password}})
-        # We don't reply with text here, we send the FULL Updated Panel
     
-    # Clean up user input and bot prompt
     try:
         await message.delete()
         await reply.delete()
     except: pass
 
-    # Send the New Updated Message
     await send_updated_message(client, message.chat.id, file_id)
 
 async def send_updated_message(client, chat_id, file_id):
-    # Re-fetch fresh data
     file_data = await files_col.find_one({"log_msg_id": file_id})
     if not file_data: return
 
@@ -231,21 +214,23 @@ async def send_updated_message(client, chat_id, file_id):
     final_link = await get_short_link(base_link)
     
     is_protected = bool(file_data.get("password"))
-    pass_text = f"\n🔐 **Password:** `{file_data.get('password')}`" if is_protected else ""
+    pass_text = f"\n\n🔐 **Password:** `{file_data.get('password')}`" if is_protected else ""
     
     validity_text = ""
     if file_data.get("expiry"):
         remaining = int(file_data['expiry'] - time.time())
         if remaining > 0:
-            validity_text = f"\n⏳ **Expires in:** {remaining//60} mins"
+            validity_text = f"\n\n⏳ **Expires in:** {remaining//60} mins"
         else:
-            validity_text = "\n🚫 **Link Expired**"
+            validity_text = "\n\n🚫 **Link Expired**"
 
+    # --- UPDATED CAPTION WITH SPACING ---
     caption = (
         f"✅ **File Settings Updated!**\n\n"
-        f"📂 **Name:** `{file_data['file_name']}`\n"
-        f"📦 **Size:** {humanbytes(file_data['file_size'])}\n"
-        f"{pass_text}{validity_text}\n\n"
+        f"📂 **Name:** `{file_data['file_name']}`\n\n"
+        f"📦 **Size:** {humanbytes(file_data['file_size'])}"
+        f"{pass_text}"
+        f"{validity_text}\n\n"
         f"🔗 **Link:**\n`{final_link}`"
     )
 
