@@ -1,9 +1,10 @@
+import aiohttp
 from pyrogram import Client
 from pyrogram.errors import UserNotParticipant
 from config import Config
 
+# --- EXISTING CODE ---
 class TgFileStreamer:
-    # ... (Keep existing TgFileStreamer class) ...
     def __init__(self, client: Client, file_id: str, start_offset: int = 0):
         self.client = client
         self.file_id = file_id
@@ -17,7 +18,6 @@ class TgFileStreamer:
         ):
             yield chunk
 
-# --- NEW HELPER ---
 async def is_subscribed(client, user_id):
     if not Config.FORCE_SUB_CHANNEL:
         return True
@@ -28,4 +28,14 @@ async def is_subscribed(client, user_id):
         return False
     except Exception as e:
         print(f"FSub Error: {e}")
-        return True # Fail safe
+        return True
+
+# --- NEW FUNCTION ---
+async def get_tinyurl(long_url):
+    url = f"http://tinyurl.com/api-create.php?url={long_url}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                return await response.text()
+    except Exception:
+        return long_url # Fallback to original if failed
