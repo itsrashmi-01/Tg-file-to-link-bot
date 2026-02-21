@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from config import Config
 from bot.clone import db
-from bot_client import tg_bot # <--- UPDATED
+from bot_client import tg_bot
 
 router = APIRouter()
 
@@ -18,6 +18,13 @@ auth_codes_col = db.auth_codes
 
 class AuthData(BaseModel):
     initData: str
+
+# --- NEW MODEL ---
+class SettingUpdate(BaseModel):
+    user_id: int
+    setting: str
+    value: bool
+# -----------------
 
 class FileAction(BaseModel):
     user_id: int
@@ -35,12 +42,13 @@ def validate_telegram_data(init_data: str) -> dict:
         return json.loads(parsed_data["user"])
     except: return None
 
+# --- EXISTING AUTH ENDPOINTS ---
 @router.get("/api/auth/generate_token")
 async def generate_token():
     token = str(uuid.uuid4())
     await auth_codes_col.insert_one({"token": token, "status": "pending", "timestamp": time.time()})
     try: 
-        me = await tg_bot.get_me() # <--- UPDATED
+        me = await tg_bot.get_me()
         bot_username = me.username
     except: 
         bot_username = "temp_bot"
@@ -63,6 +71,24 @@ async def login(data: AuthData):
     await users_col.update_one({"user_id": user_id}, {"$set": {"first_name": user.get("first_name")}}, upsert=True)
     return {"success": True, "user": user, "role": "admin" if user_id in Config.ADMIN_IDS else "user"}
 
+# --- NEW SETTINGS ENDPOINTS ---
+@router.get("/api/settings/get")
+async def get_settings(user_id: int):
+    user = await users_col.find_one({"user_id": user_id})
+    return {
+        "use_shortener": user.get("use_shortener", False) if user else False
+    }
+
+@router.post("/api/settings/update")
+async def update_settings(data: SettingUpdate):
+    await users_col.update_one(
+        {"user_id": data.user_id},
+        {"$set": {data.setting: data.value}}
+    )
+    return {"success": True}
+# ------------------------------
+
+# --- EXISTING DASHBOARD ENDPOINTS ---
 @router.get("/api/dashboard/user")
 async def get_user_dashboard(user_id: int):
     pipeline = [{"$match": {"user_id": user_id}}, {"$group": {"_id": None, "totalSize": {"$sum": "$file_size"}, "count": {"$sum": 1}}}]
@@ -111,7 +137,7 @@ async def rename_file(data: FileAction):
 async def delete_file(data: FileAction):
     doc = await files_col.find_one({"file_unique_id": data.file_id, "user_id": data.user_id})
     if doc:
-        try: await tg_bot.delete_messages(Config.LOG_CHANNEL_ID, doc['log_msg_id']) # <--- UPDATED
+        try: await tg_bot.delete_messages(Config.LOG_CHANNEL_ID, doc['log_msg_id'])
         except: pass
         await files_col.delete_one({"_id": doc['_id']})
         return {"success": True}
