@@ -5,7 +5,7 @@ from config import Config
 
 users_col = db.users
 
-# --- ADMIN & UTILITY COMMANDS ---
+# --- ADMIN & UTILITY COMMANDS (Start is now in start.py) ---
 
 @Client.on_message(filters.command("clone") & filters.private)
 async def clone_handler(client, message):
@@ -16,12 +16,17 @@ async def clone_handler(client, message):
     msg = await message.reply("♻️ Cloning...")
     
     try:
-        new_client = await start_clone(token, message.from_user.id)
-        if new_client:
-            await clones_col.insert_one({"token": token, "user_id": message.from_user.id, "username": new_client.username})
-            await msg.edit(f"✅ **Cloned Successfully!**\nBot: @{new_client.username}")
+        new_client = await start_clone(token)
+        # Verify the client started successfully
+        if new_client and new_client.me:
+            await clones_col.insert_one({
+                "token": token, 
+                "user_id": message.from_user.id,
+                "username": new_client.me.username
+            })
+            await msg.edit(f"✅ **Cloned Successfully!**\nBot: @{new_client.me.username}")
         else:
-            await msg.edit("❌ **Error:** Could not start the clone. Check the token.")
+             await msg.edit("❌ **Error:** Could not start the cloned bot. Check the token.")
     except Exception as e:
         await msg.edit(f"❌ Error: {e}")
 
