@@ -1,14 +1,41 @@
-import asyncio
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from bot.clone import start_clone, clones_col, db # Reusing db from clone.py
-from config import Config
+# ... (Keep existing imports) ...
+from bot.clone import db
 
-users_col = db.users
+# ... (Keep existing setup) ...
+auth_codes_col = db.auth_codes # Access the auth collection
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
-    # 1. Save User to DB
+    # --- 1. CHECK FOR LOGIN VERIFICATION ---
+    if len(message.command) > 1:
+        payload = message.command[1]
+        
+        if payload.startswith("login_"):
+            token = payload.replace("login_", "")
+            
+            # Find the pending token and verify it
+            result = await auth_codes_col.update_one(
+                {"token": token, "status": "pending"},
+                {"$set": {
+                    "status": "verified",
+                    "user_id": message.from_user.id,
+                    "user_info": {
+                        "id": message.from_user.id,
+                        "first_name": message.from_user.first_name,
+                        "username": message.from_user.username or ""
+                    },
+                    "role": "admin" if message.from_user.id in Config.ADMIN_IDS else "user"
+                }}
+            )
+            
+            if result.modified_count > 0:
+                await message.reply("✅ **Login Successful!**\n\nYou can now return to your browser.", quote=True)
+            else:
+                await message.reply("❌ **Link Expired or Already Used.**", quote=True)
+            return
+
+    # --- 2. EXISTING START LOGIC ---
+    # (Existing user tracking logic)
     try:
         await users_col.update_one(
             {"user_id": message.from_user.id},
@@ -26,26 +53,3 @@ async def start_handler(client, message):
         "• `/protect password` - Reply to a file to set a password",
         quote=True
     )
-
-# ... (Keep clone_handler) ...
-
-# --- NEW ADMIN COMMANDS ---
-
-@Client.on_message(filters.command("stats") & filters.user(Config.ADMIN_IDS))
-async def stats_handler(client, message):
-    users = await users_col.count_documents({})
-    clones = await clones_col.count_documents({})
-    await message.reply_text(f"**📊 Bot Stats**\n\nUsers: {users}\nClones: {clones}")
-
-@Client.on_message(filters.command("broadcast") & filters.user(Config.ADMIN_IDS) & filters.reply)
-async def broadcast_handler(client, message):
-    msg = await message.reply("📡 Broadcasting...")
-    count = 0
-    async for user in users_col.find():
-        try:
-            await message.reply_to_message.copy(chat_id=user['user_id'])
-            count += 1
-            await asyncio.sleep(0.05) # Prevent FloodWait
-        except Exception:
-            pass
-    await msg.edit(f"✅ Broadcast complete to {count} users.")
