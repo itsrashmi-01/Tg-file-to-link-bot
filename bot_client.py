@@ -3,7 +3,6 @@ import uvloop
 from config import Config
 
 # --- CRITICAL FIX START ---
-# We must set the policy and create a loop BEFORE importing Pyrogram.
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -12,7 +11,8 @@ asyncio.set_event_loop(loop)
 from pyrogram import Client
 
 # Initialize the Main Bot
-bot = Client(
+# RENAMED TO 'tg_bot' TO AVOID CONFLICT WITH 'bot' FOLDER
+tg_bot = Client(
     "FastStreamBot",
     api_id=Config.API_ID,
     api_hash=Config.API_HASH,
