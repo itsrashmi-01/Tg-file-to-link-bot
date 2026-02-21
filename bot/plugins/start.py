@@ -1,6 +1,6 @@
 import asyncio
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from bot.clone import db
 from config import Config
 
@@ -61,7 +61,7 @@ async def start_handler(client, message):
         "• `/protect password` - Reply to a file to set a password\n"
         "• **Web Dashboard:** Click the menu button to manage files.",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📂 My Dashboard", web_app={"url": web_app_url})]
+            [InlineKeyboardButton("📂 My Dashboard", web_app=WebAppInfo(url=web_app_url))]
         ]),
         quote=True
     )
