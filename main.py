@@ -2,7 +2,8 @@ import asyncio
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware  # <--- 1. Import this
+from fastapi.middleware.cors import CORSMiddleware  
+from bot.server.auth_routes import router as auth_router# <--- 1. Import this
 from config import Config
 
 # This import triggers the loop creation in bot_client.py
@@ -23,6 +24,7 @@ app.add_middleware(
 # --------------------------------------
 
 app.include_router(stream_router)
+app.include_router(auth_router)
 
 @app.get("/")
 async def health_check():
@@ -57,3 +59,4 @@ if __name__ == "__main__":
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
+
