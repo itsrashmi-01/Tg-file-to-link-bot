@@ -5,8 +5,7 @@ from config import Config
 
 users_col = db.users
 
-# --- ADMIN & UTILITY COMMANDS ONLY ---
-# (The /start command has been moved to start.py)
+# --- ADMIN & UTILITY COMMANDS (Start removed to prevent conflict) ---
 
 @Client.on_message(filters.command("clone") & filters.private)
 async def clone_handler(client, message):
