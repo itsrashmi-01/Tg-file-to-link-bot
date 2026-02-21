@@ -3,10 +3,11 @@ import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from config import Config
-from bot.utils import is_subscribed, get_short_link
+from bot.utils import is_subscribed, get_tinyurl
 from bot.clone import db
 
 files_col = db.files
+users_col = db.users  # Need this to check settings
 BATCH_DATA = {}
 
 # --- HELPER: Human Readable Size ---
@@ -49,15 +50,20 @@ async def file_handler(client, message):
         mg_id = message.media_group_id
         if mg_id not in BATCH_DATA:
             BATCH_DATA[mg_id] = []
-            asyncio.create_task(process_batch(client, mg_id, message.chat.id))
+            asyncio.create_task(process_batch(client, mg_id, message.chat.id, message.from_user.id))
         BATCH_DATA[mg_id].append(message)
         return
 
     await process_file(client, message)
 
-async def process_batch(client, mg_id, chat_id):
+async def process_batch(client, mg_id, chat_id, user_id):
     await asyncio.sleep(4)
     messages = BATCH_DATA.pop(mg_id, [])
+    
+    # Check User Settings
+    user = await users_col.find_one({"user_id": user_id})
+    use_short = user.get("use_short", False)
+
     links_text = "**📦 Batch Links:**\n\n"
     for msg in messages:
         log_msg = await msg.copy(chat_id=Config.LOG_CHANNEL_ID)
@@ -65,7 +71,8 @@ async def process_batch(client, mg_id, chat_id):
         await save_file_to_db(msg, log_msg, media)
         
         base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
-        final_link = await get_short_link(base_link)
+        
+        final_link = await get_tinyurl(base_link) if use_short else base_link
         
         links_text += f"• [{getattr(media, 'file_name', 'File')}]({final_link})\n"
     
@@ -79,12 +86,16 @@ async def process_file(client, message):
         await save_file_to_db(message, log_msg, media)
 
         base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
-        final_link = await get_short_link(base_link)
+        
+        # Check User Settings
+        user = await users_col.find_one({"user_id": message.from_user.id})
+        use_short = user.get("use_short", False) # Default OFF
+
+        final_link = await get_tinyurl(base_link) if use_short else base_link
         
         file_name = getattr(media, "file_name", "file")
         file_size = getattr(media, "file_size", 0)
 
-        # --- SPACED CAPTION ---
         caption = (
             f"✅ **Link Generated!**\n\n"
             f"📂 **Name:** `{file_name}`\n\n"
@@ -123,7 +134,6 @@ async def rename_callback(client, callback_query):
         "📝 **Enter new file name:**",
         reply_markup=ForceReply(selective=True, placeholder=f"rename_{file_id}")
     )
-    # No delete here, as requested
 
 @Client.on_callback_query(filters.regex(r"^protect_"))
 async def protect_callback(client, callback_query):
@@ -211,7 +221,19 @@ async def send_updated_message(client, chat_id, file_id):
     if not file_data: return
 
     base_link = f"{Config.BLOGGER_URL}?id={file_id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{file_id}"
-    final_link = await get_short_link(base_link)
+    
+    # Check User Settings again for the update
+    user = await users_col.find_one({"user_id": client.me.id}) # Fallback, ideally we need original user ID
+    # Since we can't easily get original user ID here without storing it, 
+    # we'll skip shortening for updates or assume default. 
+    # Better: Store original user_id in file_data!
+    
+    # Fix: Use stored user_id
+    owner_id = file_data.get("user_id")
+    user = await users_col.find_one({"user_id": owner_id})
+    use_short = user.get("use_short", False) if user else False
+
+    final_link = await get_tinyurl(base_link) if use_short else base_link
     
     is_protected = bool(file_data.get("password"))
     pass_text = f"\n\n🔐 **Password:** `{file_data.get('password')}`" if is_protected else ""
@@ -224,7 +246,6 @@ async def send_updated_message(client, chat_id, file_id):
         else:
             validity_text = "\n\n🚫 **Link Expired**"
 
-    # --- UPDATED CAPTION WITH SPACING ---
     caption = (
         f"✅ **File Settings Updated!**\n\n"
         f"📂 **Name:** `{file_data['file_name']}`\n\n"
