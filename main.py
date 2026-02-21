@@ -1,26 +1,24 @@
 import asyncio
 import uvicorn
+import time
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from config import Config
 
-# --- 1. CRITICAL: Initialize Bot & Event Loop FIRST ---
-from bot_client import tg_bot # <--- UPDATED IMPORT
-# ------------------------------------------------------
+# --- 1. INITIALIZE BOT FIRST ---
+from bot_client import tg_bot 
+# -------------------------------
 
-# Import Routers
 from bot.server.auth_routes import router as auth_router
 from bot.server.stream_routes import router as stream_router
-from bot.clone import load_all_clones
+from bot.clone import load_all_clones, db
 
-# Optional: Force Import plugins to ensure they load
-# Use 'from ... import' syntax to avoid overwriting the 'bot' variable name
-from bot.plugins import start 
-from bot.plugins import commands
-from bot.plugins import files
+# Import plugins to ensure they load
+from bot.plugins import start, commands, files
 
 app = FastAPI()
+files_col = db.files # Access DB for cleaner task
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,14 +28,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 2. REGISTER ROUTES ---
 app.include_router(stream_router)
 app.include_router(auth_router)
-# --------------------------
 
 @app.get("/")
 async def health_check():
     return JSONResponse({"status": "running", "bot": "online"})
+
+# --- BACKGROUND TASK: DELETE EXPIRED FILES ---
+async def delete_expired_files():
+    while True:
+        try:
+            now = time.time()
+            # Find files where expire_at exists AND is less than current time
+            async for file in files_col.find({"expire_at": {"$lt": now, "$ne": None}}):
+                print(f"🗑️ Deleting expired file: {file.get('file_name')}")
+                try:
+                    # 1. Delete from Telegram Log Channel
+                    await tg_bot.delete_messages(Config.LOG_CHANNEL_ID, file['log_msg_id'])
+                except Exception as e:
+                    print(f"Telegram Delete Error: {e}")
+                
+                # 2. Delete from Database
+                await files_col.delete_one({"_id": file['_id']})
+                
+        except Exception as e:
+            print(f"Cleaner Task Error: {e}")
+        
+        await asyncio.sleep(60) # Run check every 60 seconds
 
 async def start_services():
     print("---------------------------------")
@@ -45,21 +63,23 @@ async def start_services():
     print("---------------------------------")
 
     # 1. Start Main Bot
-    await tg_bot.start() # <--- UPDATED
-    me = await tg_bot.get_me() # <--- UPDATED
+    await tg_bot.start()
+    me = await tg_bot.get_me()
     print(f"✅ Main Bot Started: @{me.username}")
 
     # 2. Start Clones
     await load_all_clones()
 
-    # 3. Start Web Server
+    # 3. Start Background Tasks
+    asyncio.create_task(delete_expired_files()) # <--- START CLEANER
+
+    # 4. Start Web Server
     print(f"🌍 Server running at {Config.BASE_URL}")
     config = uvicorn.Config(app, host="0.0.0.0", port=Config.PORT)
     server = uvicorn.Server(config)
     await server.serve()
     
-    # 4. Cleanup
-    await tg_bot.stop() # <--- UPDATED
+    await tg_bot.stop()
 
 if __name__ == "__main__":
     try:
