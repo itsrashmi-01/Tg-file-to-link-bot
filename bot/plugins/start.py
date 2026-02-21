@@ -39,7 +39,7 @@ async def start_handler(client, message):
             return
 
     # --- 2. STANDARD START MESSAGE ---
-    # Save User to DB for Stats
+    # Save User to DB
     try:
         await users_col.update_one(
             {"user_id": message.from_user.id},
@@ -48,6 +48,9 @@ async def start_handler(client, message):
         )
     except Exception:
         pass
+
+    # Ensure we have a valid URL for the Web App button
+    web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
 
     # Send Welcome Message
     await message.reply_text(
@@ -58,7 +61,7 @@ async def start_handler(client, message):
         "• `/protect password` - Reply to a file to set a password\n"
         "• **Web Dashboard:** Click the menu button to manage files.",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📂 My Dashboard", web_app={"url": Config.BLOGGER_URL or Config.BASE_URL})]
+            [InlineKeyboardButton("📂 My Dashboard", web_app={"url": web_app_url})]
         ]),
         quote=True
     )
