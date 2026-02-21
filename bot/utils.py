@@ -28,23 +28,12 @@ async def is_subscribed(client, user_id):
         print(f"FSub Error: {e}")
         return True
 
-# --- NEW: SHORTENER HELPER ---
-async def get_short_link(long_url):
-    # Check if Shortener Configs exist (Add these to your .env if you use one)
-    # Example .env: SHORTENER_API="xyz", SHORTENER_URL="https://gplinks.com/api"
-    
-    if not hasattr(Config, 'SHORTENER_API') or not Config.SHORTENER_API:
-        return long_url # Return original if no shortener
-
+# --- TINYURL HELPER ---
+async def get_tinyurl(long_url):
     try:
         async with aiohttp.ClientSession() as session:
-            # Most shorteners use this standard API format
-            api_url = f"{Config.SHORTENER_URL}?api={Config.SHORTENER_API}&url={long_url}"
-            async with session.get(api_url) as response:
-                data = await response.json()
-                if "shortenedUrl" in data:
-                    return data["shortenedUrl"]
-                return long_url # Fallback
+            async with session.get(f"http://tinyurl.com/api-create.php?url={long_url}") as response:
+                return await response.text()
     except Exception as e:
-        print(f"Shortener Error: {e}")
+        print(f"TinyURL Error: {e}")
         return long_url
