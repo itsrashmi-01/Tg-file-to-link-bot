@@ -3,10 +3,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from config import Config
 
 class LazyMotorClient:
-    """
-    A wrapper that delays the Motor Client initialization 
-    until the Event Loop is actually running.
-    """
     def __init__(self):
         self._client = None
         self._db = None
@@ -14,6 +10,8 @@ class LazyMotorClient:
     @property
     def client(self):
         if self._client is None:
+            # Only connect when needed
+            print(f"🔌 [DB] Connecting to MongoDB...")
             self._client = AsyncIOMotorClient(Config.MONGO_URL)
         return self._client
 
@@ -23,15 +21,13 @@ class LazyMotorClient:
             self._db = self.client[Config.DB_NAME]
         return self._db
 
-    # Allow accessing collections via db.collection_name
     def __getattr__(self, name):
         return getattr(self.db, name)
     
-    # Allow accessing collections via db['collection_name']
     def __getitem__(self, name):
         return self.db[name]
 
-# Global DB Instance (This does NOT connect yet)
+# Global DB Instance
 db = LazyMotorClient()
 
 # --- CLONE LOGIC ---
@@ -59,26 +55,23 @@ async def start_clone(token, user_id, log_channel):
 
 async def stop_clone(user_id):
     if user_id in CLONE_BOTS:
-        try:
-            await CLONE_BOTS[user_id].stop()
-        except:
-            pass
+        try: await CLONE_BOTS[user_id].stop()
+        except: pass
         del CLONE_BOTS[user_id]
 
 async def load_all_clones():
     print("♻️ Loading Clones...")
     count = 0
-    # Accessing db.clones here is safe because this runs INSIDE the loop
-    async for doc in db.clones.find():
-        token = doc.get("token")
-        user_id = doc.get("user_id")
-        log_channel = doc.get("log_channel")
+    try:
+        # Check if collection exists first to trigger connection safely
+        async for doc in db.clones.find():
+            token = doc.get("token")
+            user_id = doc.get("user_id")
+            log_channel = doc.get("log_channel")
+            if token and user_id:
+                client, err = await start_clone(token, user_id, log_channel)
+                if client: count += 1
+    except Exception as e:
+        print(f"⚠️ [DB Error] Could not load clones: {e}")
         
-        if token and user_id:
-            client, err = await start_clone(token, user_id, log_channel)
-            if client:
-                count += 1
-            else:
-                print(f"❌ Failed clone {user_id}: {err}")
-                
     print(f"✅ Loaded {count} Clones.")
