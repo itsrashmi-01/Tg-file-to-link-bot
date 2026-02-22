@@ -5,4 +5,4 @@ tgcrypto
 motor
 python-dotenv
 aiohttp
-uvloop
+dnspython
