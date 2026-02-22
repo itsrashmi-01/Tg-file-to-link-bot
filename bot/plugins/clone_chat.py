@@ -1,6 +1,7 @@
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+from pyrogram.errors import PeerIdInvalid, ChannelInvalid, ChatWriteForbidden
 from bot.clone import start_clone, stop_clone, clones_col
 from config import Config
 
@@ -10,20 +11,14 @@ USER_STATES = {}
 # --- HELPER: SMART ID FIXER ---
 def fix_channel_id(raw_id: str) -> int:
     """
-    Attempts to fix common ID errors for private channels.
-    1. Removes spaces.
-    2. If it's a large positive number (common copy-paste error), adds -100.
+    Attempts to fix common ID errors.
+    If it's a plain number (e.g. 123456), assumes it's a Supergroup (-100123456).
     """
     clean_id = str(raw_id).replace(" ", "").strip()
-    
-    # Check if it is a number
     if not clean_id.lstrip("-").isdigit():
         raise ValueError("Not a number")
-
-    # If it's a positive number and long (likely a channel ID missing prefix)
-    if clean_id.isdigit() and len(clean_id) > 9:
+    if clean_id.isdigit():
         return int(f"-100{clean_id}")
-    
     return int(clean_id)
 
 # --- 1. ENTRY POINT ---
@@ -66,7 +61,8 @@ async def cancel_clone(client: Client, callback_query: CallbackQuery):
     )
 
 # --- 3. MESSAGE HANDLER (State Machine) ---
-@Client.on_message(filters.private & filters.text & ~filters.command("start"))
+# We now accept ANY content type (Text, Forwarded, Photo, etc.) to handle forwards
+@Client.on_message(filters.private & ~filters.command("start"))
 async def clone_conversation_handler(client: Client, message: Message):
     user_id = message.from_user.id
     
@@ -78,6 +74,10 @@ async def clone_conversation_handler(client: Client, message: Message):
 
     # --- STEP A: HANDLE TOKEN INPUT ---
     if step == "WAIT_TOKEN":
+        if not message.text:
+             await message.reply("❌ **Invalid Token.** Please send text only.")
+             return
+
         token = message.text.strip()
         
         if ":" not in token or len(token) < 20:
@@ -90,12 +90,10 @@ async def clone_conversation_handler(client: Client, message: Message):
         await message.reply(
             "✅ **Token Accepted!**\n\n"
             "**Step 2:**\n"
-            "• Create a **Private Channel** (Log Channel).\n"
-            "• Add your new bot to that channel as an **Administrator**.\n"
-            "• Send me the **Channel ID**.\n\n"
-            "**⚠️ IMPORTANT:**\n"
-            "Private Channel IDs must start with `-100`.\n"
-            "Example: `-1001234567890`",
+            "• Add your new bot to your Log Channel as an **Admin**.\n"
+            "• **Forward a message** from that channel to me.\n"
+            "• (Or send the Channel ID manually).\n\n"
+            "__Tip: Forwarding is recommended to avoid ID errors.__",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("❌ Cancel", callback_data="cancel_clone")]
             ])
@@ -103,72 +101,87 @@ async def clone_conversation_handler(client: Client, message: Message):
 
     # --- STEP B: HANDLE CHANNEL ID INPUT ---
     elif step == "WAIT_CHANNEL":
-        raw_id = message.text.strip()
+        channel_id = None
         
-        try:
-            # Attempt to fix the ID automatically
-            channel_id = fix_channel_id(raw_id)
-        except ValueError:
-            await message.reply("❌ **Invalid ID.** Please send a numeric ID (e.g., `-100xxxx`).")
+        # 1. CHECK FORWARDED MESSAGE (Best Method)
+        if message.forward_from_chat:
+            channel_id = message.forward_from_chat.id
+            print(f"DEBUG: Detected Forward ID: {channel_id}")
+        
+        # 2. CHECK TEXT INPUT (Fallback)
+        elif message.text:
+            try:
+                channel_id = fix_channel_id(message.text.strip())
+            except ValueError:
+                pass # Will fail below if channel_id is still None
+        
+        if not channel_id:
+            await message.reply(
+                "❌ **Could not detect Channel ID.**\n\n"
+                "Please **Forward a message** from your Log Channel to me.\n"
+                "Make sure I am allowed to see forwards from that channel."
+            )
             return
 
         token = state["token"]
-        # Inform user if we auto-fixed the ID
-        fix_msg = f" (Auto-fixed to `{channel_id}`)" if str(channel_id) != raw_id else ""
-        status_msg = await message.reply(f"⚙️ **Booting up...**\nVerifying ID{fix_msg}...")
+        status_msg = await message.reply(f"⚙️ **Booting up...**\nTarget ID: `{channel_id}`")
 
-        # --- CALL THE CLONE FUNCTION ---
         try:
             # 1. Start the Bot Client
             client_instance = await start_clone(token, user_id, channel_id)
             
-            if client_instance:
-                bot_info = await client_instance.get_me()
-                
-                # 2. TEST CONNECTION: Send Msg to Log Channel
-                try:
-                    await client_instance.send_message(
-                        channel_id,
-                        "**🤖 System Notification**\n\n"
-                        "✅ **Databases Connected Successfully.**\n"
-                        "Your Clone Bot is now linked to this Log Channel."
-                    )
-                except Exception as e:
-                    # IF FAIL: Stop bot, don't save, show EXACT error
-                    await stop_clone(user_id)
-                    await status_msg.edit_text(
-                        f"❌ **Connection Failed!**\n\n"
-                        f"**Error Details:**\n`{str(e)}`\n\n"
-                        f"**Attempted Channel ID:** `{channel_id}`\n\n"
-                        "**Checklist:**\n"
-                        "1. Is the ID correct? (Did you copy it from a URL?)\n"
-                        "2. Is the bot an **Admin** in the channel?\n"
-                        "3. Does the bot have 'Post Messages' permission?",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_clone")]
-                        ])
-                    )
-                    return # Stop here
-                
-                # 3. IF SUCCESS: Save to MongoDB
-                await clones_col.insert_one({
-                    "user_id": user_id,
-                    "token": token,
-                    "log_channel": channel_id,
-                    "username": bot_info.username,
-                    "first_name": bot_info.first_name
-                })
-                
-                await status_msg.edit_text(
-                    f"✅ **Success! Your bot is online.**\n\n"
-                    f"🤖 **Bot:** @{bot_info.username}\n"
-                    f"📡 **Log Channel:** Connected `{channel_id}`\n\n"
-                    f"__Click /start in your new bot to begin.__"
-                )
-                del USER_STATES[user_id]
-            else:
+            if not client_instance:
                 await status_msg.edit_text("❌ **Failed to start.** Invalid Bot Token.")
-                
+                return
+
+            bot_info = await client_instance.get_me()
+            
+            # 2. TEST CONNECTION
+            try:
+                await client_instance.send_message(
+                    channel_id,
+                    "**🤖 System Notification**\n\n"
+                    "✅ **Databases Connected Successfully.**\n"
+                    "Your Clone Bot is now linked to this Log Channel."
+                )
+            except ChatWriteForbidden:
+                 await stop_clone(user_id)
+                 await status_msg.edit_text(
+                    "❌ **Permission Error!**\n\n"
+                    "I found the channel, but **cannot send messages**.\n"
+                    "👉 Please ensure your bot is an **Admin** with 'Post Messages' rights."
+                 )
+                 return
+            except Exception as e:
+                # If forward worked but connection failed, it's likely a weird edge case
+                await stop_clone(user_id)
+                await status_msg.edit_text(
+                    f"❌ **Connection Failed!**\n\n"
+                    f"Error: `{str(e)}`\n"
+                    f"ID: `{channel_id}`\n\n"
+                    "Please ensure the bot is an **Administrator** in the channel."
+                )
+                return
+
+            # 3. SUCCESS
+            await clones_col.insert_one({
+                "user_id": user_id,
+                "token": token,
+                "log_channel": channel_id,
+                "username": bot_info.username,
+                "first_name": bot_info.first_name
+            })
+            
+            await status_msg.edit_text(
+                f"✅ **Success! Your bot is online.**\n\n"
+                f"🤖 **Bot:** @{bot_info.username}\n"
+                f"📡 **Log Channel:** Connected `{channel_id}`\n"
+                f"📨 **Test Message:** Sent\n\n"
+                f"__Click /start in your new bot to begin.__"
+            )
+            del USER_STATES[user_id]
+
         except Exception as e:
+            await stop_clone(user_id)
             await status_msg.edit_text(f"❌ **System Error:** `{str(e)}`")
             del USER_STATES[user_id]
