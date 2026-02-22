@@ -3,10 +3,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from config import Config
 
 class LazyMotorClient:
-    """
-    A wrapper that delays the Motor Client initialization 
-    until the Event Loop is actually running.
-    """
     def __init__(self):
         self._client = None
         self._db = None
@@ -14,8 +10,6 @@ class LazyMotorClient:
     @property
     def client(self):
         if self._client is None:
-            # This runs only when we first try to use the DB
-            # By this time, Uvicorn has started the loop.
             self._client = AsyncIOMotorClient(Config.MONGO_URL)
         return self._client
 
@@ -25,24 +19,16 @@ class LazyMotorClient:
             self._db = self.client[Config.DB_NAME]
         return self._db
 
-    # --- Proxy methods to behave like a Database object ---
     def __getattr__(self, name):
-        # Allow accessing collections directly: db.users
         return getattr(self.db, name)
     
     def __getitem__(self, name):
-        # Allow accessing collections via dict: db['users']
         return self.db[name]
 
-# Create the Global DB Instance
-# This does NOT connect yet. It just creates the wrapper.
+# Global DB Instance
 db = LazyMotorClient()
 
-# Define Collections (These are now proxies)
-clones_col = db.clones
-
 # --- CLONE FUNCTIONS ---
-# We keep these as they were, but they use the global `db` which auto-connects
 CLONE_BOTS = {}
 
 async def start_clone(token, user_id, log_channel):
@@ -74,7 +60,7 @@ async def stop_clone(user_id):
 async def load_all_clones():
     print("♻️ Loading Clones...")
     count = 0
-    # db.clones access triggers the connection here
+    # Access db.clones HERE, inside the async function
     async for doc in db.clones.find():
         token = doc.get("token")
         user_id = doc.get("user_id")
