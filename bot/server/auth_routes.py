@@ -8,23 +8,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from config import Config
 from bot.clone import db
-from bot_client import tg_bot
+from bot_client import tg_bot 
 
 router = APIRouter()
 
 users_col = db.users
 files_col = db.files
 auth_codes_col = db.auth_codes
+clones_col = db.clones # <--- New Collection Access
 
 class AuthData(BaseModel):
     initData: str
-
-# --- NEW MODEL ---
-class SettingUpdate(BaseModel):
-    user_id: int
-    setting: str
-    value: bool
-# -----------------
 
 class FileAction(BaseModel):
     user_id: int
@@ -42,13 +36,12 @@ def validate_telegram_data(init_data: str) -> dict:
         return json.loads(parsed_data["user"])
     except: return None
 
-# --- EXISTING AUTH ENDPOINTS ---
 @router.get("/api/auth/generate_token")
 async def generate_token():
     token = str(uuid.uuid4())
     await auth_codes_col.insert_one({"token": token, "status": "pending", "timestamp": time.time()})
     try: 
-        me = await tg_bot.get_me()
+        me = await tg_bot.get_me() 
         bot_username = me.username
     except: 
         bot_username = "temp_bot"
@@ -71,31 +64,15 @@ async def login(data: AuthData):
     await users_col.update_one({"user_id": user_id}, {"$set": {"first_name": user.get("first_name")}}, upsert=True)
     return {"success": True, "user": user, "role": "admin" if user_id in Config.ADMIN_IDS else "user"}
 
-# --- NEW SETTINGS ENDPOINTS ---
-@router.get("/api/settings/get")
-async def get_settings(user_id: int):
-    user = await users_col.find_one({"user_id": user_id})
-    return {
-        "use_shortener": user.get("use_shortener", False) if user else False
-    }
-
-@router.post("/api/settings/update")
-async def update_settings(data: SettingUpdate):
-    await users_col.update_one(
-        {"user_id": data.user_id},
-        {"$set": {data.setting: data.value}}
-    )
-    return {"success": True}
-# ------------------------------
-
-# --- EXISTING DASHBOARD ENDPOINTS ---
 @router.get("/api/dashboard/user")
 async def get_user_dashboard(user_id: int):
+    # 1. Stats
     pipeline = [{"$match": {"user_id": user_id}}, {"$group": {"_id": None, "totalSize": {"$sum": "$file_size"}, "count": {"$sum": 1}}}]
     stats = await files_col.aggregate(pipeline).to_list(1)
     total_size = stats[0]['totalSize'] if stats else 0
     total_count = stats[0]['count'] if stats else 0
 
+    # 2. Files
     cursor = files_col.find({"user_id": user_id}).sort("_id", -1).limit(50)
     files = []
     async for doc in cursor:
@@ -106,7 +83,20 @@ async def get_user_dashboard(user_id: int):
             "link": f"{Config.BASE_URL}/dl/{doc.get('log_msg_id')}"
         })
         
-    return {"files": files, "stats": {"used_storage": total_size, "total_files": total_count}}
+    # 3. Clone Bot Info (Updated Logic)
+    clone_info = await clones_col.find_one({"user_id": user_id})
+    clone_data = None
+    if clone_info:
+        clone_data = {
+            "username": clone_info.get("username"),
+            # Don't send token for security
+        }
+        
+    return {
+        "files": files, 
+        "stats": {"used_storage": total_size, "total_files": total_count},
+        "clone_bot": clone_data # <--- Sending to Frontend
+    }
 
 @router.get("/api/search")
 async def search_files(user_id: int, query: str):
@@ -137,7 +127,7 @@ async def rename_file(data: FileAction):
 async def delete_file(data: FileAction):
     doc = await files_col.find_one({"file_unique_id": data.file_id, "user_id": data.user_id})
     if doc:
-        try: await tg_bot.delete_messages(Config.LOG_CHANNEL_ID, doc['log_msg_id'])
+        try: await tg_bot.delete_messages(Config.LOG_CHANNEL_ID, doc['log_msg_id']) 
         except: pass
         await files_col.delete_one({"_id": doc['_id']})
         return {"success": True}
@@ -147,3 +137,24 @@ async def delete_file(data: FileAction):
 async def get_admin_dashboard(user_id: int):
     if user_id not in Config.ADMIN_IDS: raise HTTPException(status_code=403)
     return {"stats": {"total_users": await users_col.count_documents({}), "total_files": await files_col.count_documents({})}}
+
+# Settings Endpoints
+@router.get("/api/settings/get")
+async def get_settings(user_id: int):
+    user = await users_col.find_one({"user_id": user_id})
+    if user:
+        return {"use_shortener": user.get("use_short", False)}
+    return {"use_shortener": False}
+
+@router.post("/api/settings/update")
+async def update_settings(data: dict):
+    key_map = {"use_shortener": "use_short"}
+    if data.get("setting") in key_map:
+        db_key = key_map[data.get("setting")]
+        await users_col.update_one(
+            {"user_id": data.get("user_id")},
+            {"$set": {db_key: data.get("value")}},
+            upsert=True
+        )
+        return {"success": True}
+    return {"success": False}
