@@ -8,25 +8,22 @@ class Config:
     API_HASH = os.getenv("API_HASH", "")
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     
-    # --- FIX: Read DB_URL if MONGO_URL is missing ---
+    # Database
     MONGO_URL = os.getenv("MONGO_URL") or os.getenv("DB_URL", "")
-    DB_URL = MONGO_URL
-    # ------------------------------------------------
-    
     DB_NAME = os.getenv("DB_NAME", "Cluster0")
     
+    # Channels & Admins
     try:
         LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
     except ValueError:
         LOG_CHANNEL_ID = 0
         
+    FORCE_SUB_CHANNEL = int(os.getenv("FORCE_SUB_CHANNEL", "0")) 
+    FORCE_SUB_URL = os.getenv("FORCE_SUB_URL", "")
+    
+    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split()] if os.getenv("ADMIN_IDS") else []
+
+    # Web
     PORT = int(os.getenv("PORT", 8080))
     BASE_URL = os.getenv("BASE_URL", "http://localhost:8080").rstrip("/")
     BLOGGER_URL = os.getenv("BLOGGER_URL", "").rstrip("/")
-
-    # Force Subscribe Channel ID (Start with -100...)
-    FORCE_SUB_CHANNEL = int(os.getenv("FORCE_SUB_CHANNEL", "0")) 
-    # Link to the channel (e.g., https://t.me/mychannel)
-    FORCE_SUB_URL = os.getenv("FORCE_SUB_URL", "")
-    # List of Admin User IDs (separated by spaces in .env)
-    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split()] if os.getenv("ADMIN_IDS") else []
