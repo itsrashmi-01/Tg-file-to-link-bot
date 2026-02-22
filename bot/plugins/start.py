@@ -6,11 +6,14 @@ from config import Config
 from bot_client import tg_bot
 
 async def get_main_menu(client, user_id, first_name):
+    # Determine Main Bot
     main_bot_id = int(Config.BOT_TOKEN.split(":")[0])
     if not client.me: await client.get_me()
     is_main_bot = (client.me.id == main_bot_id)
 
+    # Clone Logic
     if is_main_bot:
+        # DB ACCESS INSIDE FUNCTION -> SAFE
         user_clone = await db.clones.find_one({"user_id": user_id})
         if user_clone: clone_btn = InlineKeyboardButton("🤖 Manage Your Bot", callback_data="manage_clone")
         else: clone_btn = InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")
@@ -18,6 +21,7 @@ async def get_main_menu(client, user_id, first_name):
         main_username = tg_bot.me.username if tg_bot.me else "red_b_bot"
         clone_btn = InlineKeyboardButton("🤖 Create Your Own Bot", url=f"https://t.me/{main_username}?start=create_bot")
 
+    # Web App
     base_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
     bot_id = client.me.id
     sep = "&" if "?" in base_url else "?"
@@ -37,21 +41,34 @@ async def get_main_menu(client, user_id, first_name):
 async def start_handler(client, message):
     if len(message.command) > 1:
         payload = message.command[1]
+        
         if payload.startswith("login_"):
             token = payload.replace("login_", "")
-            result = await db.auth_codes.update_one({"token": token, "status": "pending"}, {"$set": {"status": "verified", "user_id": message.from_user.id, "user_info": {"id": message.from_user.id, "first_name": message.from_user.first_name}, "role": "admin" if message.from_user.id in Config.ADMIN_IDS else "user"}})
+            # DB ACCESS INSIDE FUNCTION -> SAFE
+            result = await db.auth_codes.update_one(
+                {"token": token, "status": "pending"},
+                {"$set": {
+                    "status": "verified",
+                    "user_id": message.from_user.id,
+                    "user_info": {"id": message.from_user.id, "first_name": message.from_user.first_name},
+                    "role": "admin" if message.from_user.id in Config.ADMIN_IDS else "user"
+                }}
+            )
             if result.modified_count > 0: await message.reply("✅ **Login Successful!**", quote=True)
             else: await message.reply("❌ **Link Expired.**", quote=True)
             return
+            
         elif payload == "create_bot":
             try:
                 from bot.plugins.commands import CLONE_SESSION
                 CLONE_SESSION[message.from_user.id] = {"step": "WAIT_TOKEN"}
-                await message.reply_text("🤖 **Clone Bot Wizard**\nSend your Token.", reply_markup=ForceReply(selective=True, placeholder="Token..."))
+                await message.reply_text("🤖 **Clone Bot Wizard**\nSend Token.", reply_markup=ForceReply(selective=True, placeholder="Token..."))
             except: pass
             return
 
-    try: await db.users.update_one({"user_id": message.from_user.id}, {"$set": {"user_id": message.from_user.id}}, upsert=True)
+    try: 
+        # DB ACCESS INSIDE FUNCTION -> SAFE
+        await db.users.update_one({"user_id": message.from_user.id}, {"$set": {"user_id": message.from_user.id}}, upsert=True)
     except: pass
 
     text, buttons = await get_main_menu(client, message.from_user.id, message.from_user.first_name)
@@ -64,6 +81,7 @@ async def back_to_start(client, callback_query):
 
 @Client.on_callback_query(filters.regex("manage_clone"))
 async def manage_clone_callback(client, callback_query):
+    # DB ACCESS INSIDE FUNCTION -> SAFE
     user_clone = await db.clones.find_one({"user_id": callback_query.from_user.id})
     if not user_clone: return await callback_query.answer("Clone not found!", show_alert=True)
     await callback_query.message.edit_text(f"🤖 **Clone Bot**\n@{user_clone.get('username')}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]]))
@@ -78,6 +96,7 @@ async def clone_info_callback(client, callback_query):
 
 @Client.on_callback_query(filters.regex("settings"))
 async def settings_callback(client, callback_query):
+    # DB ACCESS INSIDE FUNCTION -> SAFE
     user = await db.users.find_one({"user_id": callback_query.from_user.id})
     is_short = user.get("use_short", False) if user else False
     status_text = "✅ ON" if is_short else "❌ OFF"
