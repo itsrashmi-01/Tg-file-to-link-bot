@@ -13,8 +13,8 @@ CLONE_BOTS = {}
 
 async def start_clone(token, user_id, log_channel):
     try:
-        # Create unique session name
-        session_name = f":memory:"
+        # Use a unique session name for each user to avoid conflicts
+        session_name = f":memory:{user_id}"
         
         client = Client(
             session_name,
@@ -25,25 +25,30 @@ async def start_clone(token, user_id, log_channel):
             in_memory=True
         )
         
-        # --- CRITICAL: Attach the Log Channel ID to the Client ---
-        client.log_channel = int(log_channel) 
+        # --- Fix: Handle Channel ID (Int) vs Username (Str) ---
+        # We attach it now; validation happens in commands.py
+        client.log_channel = log_channel 
         client.owner_id = int(user_id)
-        # ---------------------------------------------------------
+        # ------------------------------------------------------
 
         await client.start()
-        me = await client.get_me()
         
         # Save running client to memory
         CLONE_BOTS[user_id] = client
         
-        return client
+        return client, None  # Success: Return (Client, No Error)
+        
     except Exception as e:
+        error_msg = str(e)
         print(f"Clone Start Error: {e}")
-        return None
+        return None, error_msg  # Failure: Return (None, Error Message)
 
 async def stop_clone(user_id):
     if user_id in CLONE_BOTS:
-        await CLONE_BOTS[user_id].stop()
+        try:
+            await CLONE_BOTS[user_id].stop()
+        except:
+            pass
         del CLONE_BOTS[user_id]
 
 async def load_all_clones():
@@ -52,9 +57,15 @@ async def load_all_clones():
     async for doc in clones_col.find():
         token = doc.get("token")
         user_id = doc.get("user_id")
-        log_channel = doc.get("log_channel") # Load from DB
+        log_channel = doc.get("log_channel")
         
         if token and user_id and log_channel:
-            await start_clone(token, user_id, log_channel)
-            count += 1
+            client, err = await start_clone(token, user_id, log_channel)
+            if client:
+                count += 1
+            else:
+                # If a clone fails to load (e.g. token revoked), remove it
+                print(f"❌ Failed to load clone for {user_id}: {err}")
+                await clones_col.delete_one({"_id": doc["_id"]})
+                
     print(f"✅ Loaded {count} Clones.")
