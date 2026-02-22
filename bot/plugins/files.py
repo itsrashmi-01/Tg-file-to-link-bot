@@ -1,6 +1,6 @@
-import asyncio
+=import asyncio
 import time
-from pyrogram import Client, filters, enums
+from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from config import Config
 from bot.clone import db
@@ -48,10 +48,17 @@ def get_file_buttons(msg_id, link, is_protected=False):
     ])
 
 # --- FILE HANDLER ---
-@Client.on_message((filters.document | filters.video | filters.audio) & filters.private)
+@Client.on_message((filters.document | filters.video | filters.audio | filters.photo) & filters.private)
 async def file_handler(client, message):
-    # Debug Print
-    print(f"📥 Received file from {message.from_user.id} ({client.me.username})")
+    # --- CHECK FOR WIZARD SESSION ---
+    # If the user is creating a bot, IGNORE this file so the wizard handler can catch it.
+    try:
+        from bot.plugins.commands import CLONE_SESSION
+        if message.from_user.id in CLONE_SESSION:
+            return 
+    except ImportError:
+        pass
+    # -------------------------------
 
     # Handle Media Groups (Albums)
     if message.media_group_id:
@@ -73,20 +80,26 @@ async def process_batch(client, mg_id, chat_id, user_id):
         await client.send_message(chat_id, "❌ **Error:** No Database Channel Configured.")
         return
 
-    # Check Settings
-    user = await users_col.find_one({"user_id": user_id})
-    # TinyURL logic removed for simplicity in debugging, can re-add later
-    
     links_text = "**📦 Batch Links:**\n\n"
     
     for msg in messages:
         try:
+            # Determine Media Type
+            media = msg.document or msg.video or msg.audio or msg.photo
+            if not media: continue
+
+            # For photos, Pyrogram puts attributes differently (photo is a list or object depending on version)
+            # We normalize filename/size handling
+            file_name = getattr(media, "file_name", "Photo.jpg")
+            file_size = getattr(media, "file_size", 0)
+            
+            # Copy to Channel
             log_msg = await msg.copy(chat_id=target_channel)
-            media = msg.document or msg.video or msg.audio
-            await save_file_to_db(msg, log_msg, media)
+            
+            await save_file_to_db(msg, log_msg, media, file_name, file_size)
             
             base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
-            links_text += f"• [{getattr(media, 'file_name', 'File')}]({base_link})\n"
+            links_text += f"• [{file_name}]({base_link})\n"
         except Exception as e:
             print(f"Batch Error: {e}")
     
@@ -94,30 +107,36 @@ async def process_batch(client, mg_id, chat_id, user_id):
 
 async def process_file(client, message):
     try:
-        # 1. Get Target Channel
         target_channel = get_log_channel(client)
         
         if not target_channel:
-            return await message.reply("❌ **Critical Error:**\nDatabase Channel ID is missing.\n\nIf you are using a Clone Bot, please recreate it using `/clone`.\nIf you are the Admin, check `LOG_CHANNEL_ID` in Config.")
+            return await message.reply("❌ **Critical Error:**\nDatabase Channel ID is missing.\nPlease check your bot settings or recreate the clone.")
 
-        # 2. Copy to Channel
+        # Determine Media
+        media = message.document or message.video or message.audio or message.photo
+        file_name = getattr(media, "file_name", "file")
+        file_size = getattr(media, "file_size", 0)
+        
+        # Specific handling for Photos (which don't have file_name usually)
+        if message.photo:
+            file_name = f"Photo_{message.id}.jpg"
+            # Pyrogram photo is a list of sizes, we usually want the file_unique_id of the biggest one? 
+            # Or msg.photo itself object has .file_id? 
+            # Actually message.photo is Photo object in recent Pyrogram.
+            # Let's trust generic getattr, or fallback.
+
+        # Copy to Channel
         try:
             log_msg = await message.copy(chat_id=target_channel)
         except Exception as e:
-            # Common errors: ChatWriteForbidden (Bot not admin), PeerIdInvalid (Bot hasn't met channel)
-            print(f"Copy Error: {e}")
-            return await message.reply(f"❌ **Channel Error:**\nI cannot copy the file to the database channel ({target_channel}).\n\n**Fix:**\n1. Make sure I am an **Admin** in that channel.\n2. Ensure the Channel ID is correct.\n\n`Error: {e}`")
+            return await message.reply(f"❌ **Channel Error:**\nI cannot copy the file to the DB channel ({target_channel}).\n\n**Fix:** Ensure I am Admin there.\n`{e}`")
 
-        # 3. Save to DB
-        media = message.document or message.video or message.audio
-        await save_file_to_db(message, log_msg, media)
+        # Save to DB
+        await save_file_to_db(message, log_msg, media, file_name, file_size)
 
-        # 4. Generate Link
+        # Generate Link
         base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
         
-        file_name = getattr(media, "file_name", "file")
-        file_size = getattr(media, "file_size", 0)
-
         caption = (
             f"✅ **Link Generated!**\n\n"
             f"📂 **Name:** `{file_name}`\n\n"
@@ -135,13 +154,18 @@ async def process_file(client, message):
         print(f"Process Error: {e}")
         await message.reply_text(f"❌ **System Error:** `{e}`")
 
-async def save_file_to_db(user_msg, log_msg, media):
+async def save_file_to_db(user_msg, log_msg, media, file_name, file_size):
+    # Safe extraction of file_unique_id
+    unique_id = getattr(media, "file_unique_id", None)
+    if not unique_id and hasattr(media, "file_id"): 
+        unique_id = media.file_id # Fallback
+
     await files_col.insert_one({
         "user_id": user_msg.from_user.id,
         "log_msg_id": log_msg.id,
-        "file_name": getattr(media, "file_name", "file"),
-        "file_size": getattr(media, "file_size", 0),
-        "file_unique_id": media.file_unique_id,
+        "file_name": file_name,
+        "file_size": file_size,
+        "file_unique_id": unique_id,
         "timestamp": time.time(),
         "password": None,
         "expiry": None
