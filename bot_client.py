@@ -2,7 +2,7 @@ from pyrogram import Client
 from config import Config
 
 # Initialize the Main Bot
-# We do NOT set the event loop policy here because Uvicorn handles it.
+# We let Uvicorn manage the event loop. We do NOT set it here.
 tg_bot = Client(
     "FastStreamBot",
     api_id=Config.API_ID,
