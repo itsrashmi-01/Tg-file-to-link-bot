@@ -60,7 +60,7 @@ async def stop_clone(user_id):
 async def load_all_clones():
     print("♻️ Loading Clones...")
     count = 0
-    # Access db.clones INSIDE the function
+    # Access db.clones INSIDE the function (Lazy Loading)
     async for doc in db.clones.find():
         token = doc.get("token")
         user_id = doc.get("user_id")
