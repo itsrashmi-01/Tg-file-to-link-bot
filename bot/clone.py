@@ -10,8 +10,7 @@ class LazyMotorClient:
     @property
     def client(self):
         if self._client is None:
-            # Only connect when needed
-            print(f"🔌 [DB] Connecting to MongoDB...")
+            # Connect only when actually accessed
             self._client = AsyncIOMotorClient(Config.MONGO_URL)
         return self._client
 
@@ -27,7 +26,7 @@ class LazyMotorClient:
     def __getitem__(self, name):
         return self.db[name]
 
-# Global DB Instance
+# Create global instance
 db = LazyMotorClient()
 
 # --- CLONE LOGIC ---
@@ -63,7 +62,6 @@ async def load_all_clones():
     print("♻️ Loading Clones...")
     count = 0
     try:
-        # Check if collection exists first to trigger connection safely
         async for doc in db.clones.find():
             token = doc.get("token")
             user_id = doc.get("user_id")
@@ -72,6 +70,5 @@ async def load_all_clones():
                 client, err = await start_clone(token, user_id, log_channel)
                 if client: count += 1
     except Exception as e:
-        print(f"⚠️ [DB Error] Could not load clones: {e}")
-        
+        print(f"⚠️ Error loading clones: {e}")
     print(f"✅ Loaded {count} Clones.")
