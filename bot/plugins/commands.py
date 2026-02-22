@@ -2,7 +2,6 @@ import asyncio
 import re
 from pyrogram import Client, filters
 from pyrogram.types import Message, ForceReply
-from pyrogram.errors import UserAlreadyParticipant, InviteHashExpired, InviteHashInvalid
 from bot.clone import start_clone, clones_col, db
 from config import Config
 
@@ -15,15 +14,15 @@ CLONE_SESSION = {}
 def parse_channel_input(text: str):
     text = text.strip()
     
-    # 1. Invite Link (Best for Private Channels)
+    # 1. Invite Link (e.g., https://t.me/+AbCd...)
     if "t.me/+" in text or "joinchat" in text:
         return {"type": "invite_link", "value": text}
 
-    # 2. Direct ID
+    # 2. Direct ID (e.g., -100...)
     if re.match(r"^-100\d+$", text):
         return {"type": "id", "value": int(text)}
     
-    # 3. Private Post Link
+    # 3. Private Post Link (e.g., t.me/c/123/1)
     private_link_match = re.search(r"t\.me\/c\/(\d+)", text)
     if private_link_match:
         return {"type": "id", "value": int(f"-100{private_link_match.group(1)}")}
@@ -76,13 +75,12 @@ async def clone_wizard_handler(client, message: Message):
         
         await message.reply_text(
             "✅ **Token Accepted!**\n\n"
-            "Now I need access to your **Private Log Channel**.\n\n"
+            "Now I need access to your **Log Channel**.\n\n"
             "1️⃣ Create a **Private Channel**.\n"
-            "2️⃣ Add your new clone bot as an **Admin**.\n"
-            "3️⃣ **Create an Invite Link** for the channel.\n"
-            "4️⃣ Paste the **Invite Link** here.\n"
-            "_(e.g., `https://t.me/+AbCdEfG123...`)_",
-            reply_markup=ForceReply(selective=True, placeholder="https://t.me/...")
+            "2️⃣ **Add your new clone bot** as an **Admin**.\n"
+            "3️⃣ **Create an Invite Link** (`t.me/+...`) and send it here.\n"
+            "_(Use Invite Link ONLY, not ID)_",
+            reply_markup=ForceReply(selective=True, placeholder="https://t.me/+...")
         )
 
     # --- STEP 2: START BOT & VERIFY CHANNEL ---
@@ -94,8 +92,7 @@ async def clone_wizard_handler(client, message: Message):
         
         msg = await message.reply("⚙️ **Verifying Channel Access...**")
         
-        # We need to pass a dummy ID (0) initially to start the client, 
-        # then we resolve the real ID using the link.
+        # Start client with dummy ID initially
         try:
             new_client, error_msg = await start_clone(session["token"], user_id, 0)
             
@@ -107,37 +104,25 @@ async def clone_wizard_handler(client, message: Message):
             
             try:
                 if channel_data["type"] == "invite_link":
-                    # KEY FIX: Using join_chat resolves the peer ID for private channels
-                    try:
-                        chat = await new_client.join_chat(channel_data["value"])
-                        final_channel_id = chat.id
-                    except UserAlreadyParticipant:
-                        # If already in, get_chat with the LINK usually works now
-                        # Or we try to resolve via the Invite Link object
-                        try:
-                            # Parse link hash if possible or just use get_chat
-                            chat = await new_client.get_chat(channel_data["value"])
-                            final_channel_id = chat.id
-                        except Exception as e:
-                            # Fallback: Ask user for ID if link fails despite being participant
-                            await new_client.stop()
-                            return await msg.edit(f"⚠️ **Already Admin, but ID not found.**\n\nPlease send the **Channel ID** (e.g. -100...) instead of the link now.")
+                    # KEY FIX: Use get_chat() on the link to resolve ID
+                    # This works for bots to "preview" the chat without joining
+                    chat = await new_client.get_chat(channel_data["value"])
+                    final_channel_id = chat.id
                 
-                elif channel_data["type"] == "id":
-                    # Direct ID: Try explicit send to force-check
-                    # If this fails with PeerInvalid, the user MUST use an Invite Link
-                    final_channel_id = channel_data["value"]
-                    await new_client.send_message(final_channel_id, "✅ **Database Connected!**")
-
                 elif channel_data["type"] == "username":
                     chat = await new_client.get_chat(channel_data["value"])
                     final_channel_id = chat.id
-                    await new_client.send_message(final_channel_id, "✅ **Database Connected!**")
+                
+                elif channel_data["type"] == "id":
+                    # Fallback for ID, though less reliable for fresh sessions
+                    final_channel_id = channel_data["value"]
 
-                # --- SUCCESS: SAVE & UPDATE ---
+                # --- VERIFY BY SENDING MESSAGE ---
                 if final_channel_id:
-                    # Update the running client's log channel
+                    # Update client config
                     new_client.log_channel = final_channel_id
+                    
+                    await new_client.send_message(final_channel_id, "✅ **Database Connected!**\n\nThis channel is now connected to your Clone Bot.")
                     
                     # Save to DB
                     await clones_col.insert_one({
