@@ -8,6 +8,25 @@ from config import Config
 users_col = db.users
 auth_codes_col = db.auth_codes
 
+# --- HELPER: Get Start Menu Content ---
+def get_start_menu(first_name):
+    web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
+    
+    text = (
+        f"👋 **Hi {first_name}!**\n\n"
+        "I am a **File Store & Link Generator Bot**.\n"
+        "Send me any file to get a direct download link.\n\n"
+        "⚙️ **New:** Go to **Settings** to turn on/off TinyURL shortener."
+    )
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 My Dashboard", web_app=WebAppInfo(url=web_app_url))],
+        [InlineKeyboardButton("📂 My Files", callback_data="my_files"), InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
+        [InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")],
+        [InlineKeyboardButton("❓ Help", callback_data="help"), InlineKeyboardButton("ℹ️ About", callback_data="about")]
+    ])
+    return text, buttons
+
 @Client.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     # --- 1. LOGIN VERIFICATION ---
@@ -37,22 +56,7 @@ async def start_handler(client, message):
         )
     except: pass
 
-    web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
-    
-    text = (
-        f"👋 **Hi {message.from_user.first_name}!**\n\n"
-        "I am a **File Store & Link Generator Bot**.\n"
-        "Send me any file to get a direct download link.\n\n"
-        "⚙️ **New:** Go to **Settings** to turn on/off TinyURL shortener."
-    )
-
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 My Dashboard", web_app=WebAppInfo(url=web_app_url))],
-        [InlineKeyboardButton("📂 My Files", callback_data="my_files"), InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
-        [InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")],
-        [InlineKeyboardButton("❓ Help", callback_data="help"), InlineKeyboardButton("ℹ️ About", callback_data="about")]
-    ])
-
+    text, buttons = get_start_menu(message.from_user.first_name)
     await message.reply_text(text, reply_markup=buttons, quote=True)
 
 # --- SETTINGS & TOGGLE LOGIC ---
@@ -93,7 +97,63 @@ async def toggle_short_handler(client, callback_query):
     # Refresh the settings menu to show new status
     await settings_callback(client, callback_query)
 
+# --- BACK BUTTON HANDLER (FIXED) ---
+
 @Client.on_callback_query(filters.regex("start_menu"))
 async def back_to_start(client, callback_query):
-    await start_handler(client, callback_query.message)
-    await callback_query.message.delete()
+    # Get first name from the user clicking the button
+    first_name = callback_query.from_user.first_name
+    text, buttons = get_start_menu(first_name)
+    
+    # Edit the message directly instead of calling start_handler
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+# --- MISSING BUTTON HANDLERS ---
+
+@Client.on_callback_query(filters.regex("help"))
+async def help_handler(client, callback_query):
+    text = (
+        "❓ **Help Guide**\n\n"
+        "1. **Send File:** Send any file to the bot.\n"
+        "2. **Get Link:** The bot replies with a download link.\n"
+        "3. **Streaming:** You can watch videos directly without downloading.\n"
+        "4. **Batch:** Send an album (multiple files) to get a batch link."
+    )
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+@Client.on_callback_query(filters.regex("about"))
+async def about_handler(client, callback_query):
+    text = (
+        "ℹ️ **About Bot**\n\n"
+        "This bot is a high-speed Telegram File-to-Link converter.\n"
+        "It supports **Resume Capabilities**, **Streaming**, and **Password Protection**."
+    )
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+@Client.on_callback_query(filters.regex("clone_info"))
+async def clone_info_handler(client, callback_query):
+    text = (
+        "🤖 **Clone This Bot**\n\n"
+        "You can create your own instance of this bot!\n\n"
+        "1. Get a Bot Token from @BotFather\n"
+        "2. Create a Private Channel (Log Channel)\n"
+        "3. Add your bot to that channel as Admin\n"
+        "4. Send: `/clone <token> <channel_id>`"
+    )
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+@Client.on_callback_query(filters.regex("my_files"))
+async def my_files_handler(client, callback_query):
+    # Simple placeholder. Usually, this would query DB.
+    # Since you have a Dashboard, we point them there.
+    web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
+    text = "📂 **My Files**\n\nPlease use the **Dashboard** to view and manage your files efficiently."
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Open Dashboard", web_app=WebAppInfo(url=web_app_url))],
+        [InlineKeyboardButton("🔙 Back", callback_data="start_menu")]
+    ])
+    await callback_query.message.edit_text(text, reply_markup=buttons)
