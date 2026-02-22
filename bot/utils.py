@@ -1,5 +1,4 @@
 from pyrogram import Client
-from config import Config
 
 class TgFileStreamer:
     def __init__(self, client: Client, file_id: str, start_offset: int = 0):
