@@ -14,22 +14,26 @@ CLONE_SESSION = {}
 def parse_channel_input(text: str):
     text = text.strip()
     
+    # 0. Check for Invite Links (Unsupported)
     if "t.me/+" in text or "joinchat" in text:
         return "INVITE_LINK_ERROR"
 
-    if re.match(r"^-100\d+$", text):
-        return int(text)
-    
-    # Private Post Link (e.g. t.me/c/123456/1 -> -100123456)
-    private_link_match = re.search(r"t\.me\/c\/(\d+)\/", text)
+    # 1. Private Post Link (e.g. https://t.me/c/1234567890/123)
+    # Extracts digits after /c/ -> 1234567890 -> adds -100 prefix
+    private_link_match = re.search(r"t\.me\/c\/(\d+)", text)
     if private_link_match:
         return int(f"-100{private_link_match.group(1)}")
 
-    # Public Username
+    # 2. Direct ID (e.g. -100123456789)
+    # Allows -100 prefix or just 10+ digits (assumes private channel)
+    if re.match(r"^-100\d+$", text):
+        return int(text)
+
+    # 3. Public Username (e.g. @channel or t.me/channel)
     username_match = re.search(r"(?:t\.me\/|@)(\w{5,32})", text)
     if username_match:
         name = username_match.group(1)
-        if name != "c":
+        if name != "c": 
             return f"@{name}"
         
     return None
@@ -73,10 +77,10 @@ async def clone_wizard_handler(client, message: Message):
         
         await message.reply_text(
             "✅ **Token Accepted!**\n\n"
-            "Now I need a **Log Channel** to store your files.\n\n"
+            "Now I need a **Log Channel** to store files.\n\n"
             "1️⃣ Create a **Private Channel**.\n"
-            "2️⃣ **Add your new clone bot** as an **Admin** in that channel.\n"
-            "3️⃣ Send any message in that channel.\n"
+            "2️⃣ **Add your new clone bot** as an **Admin**.\n"
+            "3️⃣ Send a message in that channel.\n"
             "4️⃣ **Copy the Link** to that message and paste it here.\n"
             "_(e.g., `https://t.me/c/123456/1`)_",
             reply_markup=ForceReply(selective=True, placeholder="https://t.me/c/...")
@@ -87,7 +91,7 @@ async def clone_wizard_handler(client, message: Message):
         channel_input = parse_channel_input(text)
         
         if channel_input == "INVITE_LINK_ERROR":
-            return await message.reply("❌ **Invite Links are NOT supported!**\nPlease send a **Post Link**.")
+            return await message.reply("❌ **Invite Links are NOT supported!**\nPlease send a **Post Link** or **Channel ID**.")
 
         if not channel_input:
             return await message.reply("❌ **Invalid Format.**\nPlease send a valid **Post Link** (e.g., `https://t.me/c/xxx/1`).")
@@ -101,29 +105,27 @@ async def clone_wizard_handler(client, message: Message):
             if not new_client:
                 return await msg.edit(f"❌ **Error:** The Bot Token seems invalid.\nError: `{error_msg}`")
 
-            # 2. Verify Channel Access
+            # 2. Verify Channel Access (CRITICAL FIX)
             final_channel_id = None
             try:
-                # FIXED: Use get_chat instead of get_dialogs
-                # get_chat works for Private Channel IDs if the bot is an Admin
+                # Force Resolve Peer: This fetches the access hash for Private Channels
                 chat_info = await new_client.get_chat(channel_input)
                 final_channel_id = chat_info.id
                 
-                # Send Test Message to confirm Write Access
-                await new_client.send_message(final_channel_id, "✅ **Database Connected Successfully!**")
-                
                 # Update client with resolved ID
                 new_client.log_channel = final_channel_id
+                
+                # Send Test Message
+                await new_client.send_message(final_channel_id, "✅ **Database Connected Successfully!**")
 
             except Exception as e:
                 await new_client.stop()
                 return await msg.edit(
                     f"❌ **Channel Access Error:**\n\n"
-                    f"The bot could not verify access to the channel.\n\n"
-                    "**Possible Fixes:**\n"
-                    "1. Ensure the Clone Bot is an **Admin** in the channel.\n"
-                    "2. If it's a private channel, you might need to send a message **in the channel** first so the bot registers it.\n"
-                    "3. Try sending the **Channel ID** directly (e.g. -100xxxx).\n\n"
+                    f"Your bot could not access the channel `{channel_input}`.\n\n"
+                    "**Troubleshooting:**\n"
+                    "1. Is the bot an **Admin** in the channel?\n"
+                    "2. Did you provide the correct Post Link?\n\n"
                     f"Error: `{e}`"
                 )
 
