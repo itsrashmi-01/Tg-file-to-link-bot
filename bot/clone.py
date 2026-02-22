@@ -11,7 +11,7 @@ clones_col = db.clones
 # Dictionary to keep track of running clones
 CLONE_BOTS = {}
 
-async def start_clone(token, user_id, log_channel):
+async def start_clone(token, user_id, log_channel=None):
     try:
         # Create unique session name
         session_name = f":memory:"
@@ -25,10 +25,10 @@ async def start_clone(token, user_id, log_channel):
             in_memory=True
         )
         
-        # --- CRITICAL: Attach the Log Channel ID to the Client ---
-        client.log_channel = int(log_channel) 
+        # Attach the Log Channel ID (if it exists)
+        # If None, the bot starts in "Unconfigured Mode" waiting for /connect
+        client.log_channel = int(log_channel) if log_channel else None
         client.owner_id = int(user_id)
-        # ---------------------------------------------------------
 
         await client.start()
         me = await client.get_me()
@@ -43,7 +43,10 @@ async def start_clone(token, user_id, log_channel):
 
 async def stop_clone(user_id):
     if user_id in CLONE_BOTS:
-        await CLONE_BOTS[user_id].stop()
+        try:
+            await CLONE_BOTS[user_id].stop()
+        except:
+            pass
         del CLONE_BOTS[user_id]
 
 async def load_all_clones():
@@ -52,9 +55,10 @@ async def load_all_clones():
     async for doc in clones_col.find():
         token = doc.get("token")
         user_id = doc.get("user_id")
-        log_channel = doc.get("log_channel") # Load from DB
+        log_channel = doc.get("log_channel")
         
-        if token and user_id and log_channel:
+        # We start it even if log_channel is missing (so user can fix it via /connect)
+        if token and user_id:
             await start_clone(token, user_id, log_channel)
             count += 1
     print(f"✅ Loaded {count} Clones.")
