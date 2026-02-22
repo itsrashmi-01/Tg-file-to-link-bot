@@ -139,16 +139,4 @@ async def about_handler(client, callback_query):
     )
     buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
     await callback_query.message.edit_text(text, reply_markup=buttons)
-
-@Client.on_callback_query(filters.regex("clone_info"))
-async def clone_info_handler(client, callback_query):
-    text = (
-        "🤖 **Clone This Bot**\n\n"
-        "You can create your own instance of this bot!\n\n"
-        "1. Get a Bot Token from @BotFather\n"
-        "2. Create a Private Channel (Log Channel)\n"
-        "3. Add your bot to that channel as Admin\n"
-        "4. Send: `/clone <token> <channel_id>`"
-    )
-    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
     await callback_query.message.edit_text(text, reply_markup=buttons)
