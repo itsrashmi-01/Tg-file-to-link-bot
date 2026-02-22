@@ -1,10 +1,10 @@
 import os
 import sys
 
-# --- FORCE UNBUFFERED OUTPUT (So you see logs immediately) ---
+# Unbuffered Output
 sys.stdout.reconfigure(encoding='utf-8')
 
-print("⏳ Initializing Application...")
+print("⏳ [Main] Starting Application...")
 
 try:
     import asyncio
@@ -13,55 +13,59 @@ try:
     from fastapi.middleware.cors import CORSMiddleware
     from contextlib import asynccontextmanager
     
-    print("✅ Libraries Imported.")
+    print("✅ [Main] Core Libraries Imported.")
 
-    # Check Config Imports (Common Crash Point)
+    # Check Config
     try:
         from config import Config
-        print("✅ Config Loaded.")
+        print("✅ [Main] Config Loaded.")
     except Exception as e:
-        print(f"❌ CRITICAL ERROR: Config Import Failed. Check Env Vars.\nError: {e}")
+        print(f"❌ [Main] Config Import Failed: {e}")
         sys.exit(1)
 
-    # Check Bot Imports
+    # Check Bot Client
     try:
         from bot_client import tg_bot
-        from bot.server import auth_routes
-        from bot.clone import load_all_clones
-        print("✅ Bot Modules Loaded.")
+        print("✅ [Main] Bot Client Loaded.")
     except Exception as e:
-        print(f"❌ CRITICAL ERROR: Bot Module Import Failed.\nError: {e}")
+        print(f"❌ [Main] Bot Client Import Failed: {e}")
+        sys.exit(1)
+
+    # Check Routes
+    try:
+        from bot.server import auth_routes, stream_routes
+        from bot.clone import load_all_clones
+        print("✅ [Main] Routes Loaded.")
+    except Exception as e:
+        print(f"❌ [Main] Routes Import Failed (Check bot/utils.py): {e}")
         sys.exit(1)
 
     # --- BACKGROUND TASK ---
     async def start_bot_services():
-        """Starts the bot in background without blocking Web Server"""
         try:
-            print("🚀 Starting Telegram Bot...")
+            print("🚀 [Bot] Starting Telegram Bot...")
             await tg_bot.start()
             me = await tg_bot.get_me()
-            print(f"✅ Main Bot Started: @{me.username}")
+            print(f"✅ [Bot] Started as @{me.username}")
             
-            print("♻️ Loading Clone Bots...")
+            print("♻️ [Bot] Loading Clones...")
             await load_all_clones()
-            print("✅ Clones Ready.")
+            print("✅ [Bot] Clones Ready.")
         except Exception as e:
-            print(f"⚠️ BOT STARTUP FAILED (Web Server still running): {e}")
+            print(f"⚠️ [Bot] Startup Failed: {e}")
 
-    # --- LIFESPAN MANAGER ---
+    # --- LIFESPAN ---
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Start Bot in Background
         asyncio.create_task(start_bot_services())
         yield
-        # Stop Bot
         try:
-            print("🛑 Stopping Bot...")
+            print("🛑 [Bot] Stopping...")
             await tg_bot.stop()
         except:
             pass
 
-    # --- FASTAPI APP ---
+    # --- APP ---
     app = FastAPI(lifespan=lifespan)
 
     app.add_middleware(
@@ -73,19 +77,20 @@ try:
     )
 
     app.include_router(auth_routes.router)
+    app.include_router(stream_routes.router)
 
     @app.get("/")
     async def health_check():
         return {"status": "active", "service": "Cloud Manager Bot"}
 
 except Exception as e:
-    print(f"❌ GLOBAL CRASH: {e}")
+    print(f"❌ [Main] GLOBAL CRASH: {e}")
     sys.exit(1)
 
 if __name__ == "__main__":
     try:
         port = int(os.environ.get("PORT", 8080))
-        print(f"🌍 Starting Web Server on 0.0.0.0:{port}...")
+        print(f"🌍 [Web] Starting Server on 0.0.0.0:{port}...")
         
         uvicorn.run(
             "main:app", 
@@ -94,4 +99,4 @@ if __name__ == "__main__":
             log_level="info"
         )
     except Exception as e:
-        print(f"❌ SERVER START ERROR: {e}")
+        print(f"❌ [Web] Start Error: {e}")
