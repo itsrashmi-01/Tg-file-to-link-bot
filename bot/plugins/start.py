@@ -12,6 +12,10 @@ auth_codes_col = db.auth_codes
 def get_start_menu(first_name):
     web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
     
+    # Logic to append query parameter safely
+    separator = "&" if "?" in web_app_url else "?"
+    files_url = f"{web_app_url}{separator}tab=files"
+
     text = (
         f"👋 **Hi {first_name}!**\n\n"
         "I am a **File Store & Link Generator Bot**.\n"
@@ -20,8 +24,15 @@ def get_start_menu(first_name):
     )
 
     buttons = InlineKeyboardMarkup([
+        # Main Dashboard Button
         [InlineKeyboardButton("🚀 My Dashboard", web_app=WebAppInfo(url=web_app_url))],
-        [InlineKeyboardButton("📂 My Files", callback_data="my_files"), InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
+        
+        # 'My Files' now opens the Web App directly to the files tab
+        [
+            InlineKeyboardButton("📂 My Files", web_app=WebAppInfo(url=files_url)), 
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings")
+        ],
+        
         [InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")],
         [InlineKeyboardButton("❓ Help", callback_data="help"), InlineKeyboardButton("ℹ️ About", callback_data="about")]
     ])
@@ -97,18 +108,15 @@ async def toggle_short_handler(client, callback_query):
     # Refresh the settings menu to show new status
     await settings_callback(client, callback_query)
 
-# --- BACK BUTTON HANDLER (FIXED) ---
+# --- BACK BUTTON HANDLER ---
 
 @Client.on_callback_query(filters.regex("start_menu"))
 async def back_to_start(client, callback_query):
-    # Get first name from the user clicking the button
     first_name = callback_query.from_user.first_name
     text, buttons = get_start_menu(first_name)
-    
-    # Edit the message directly instead of calling start_handler
     await callback_query.message.edit_text(text, reply_markup=buttons)
 
-# --- MISSING BUTTON HANDLERS ---
+# --- INFO HANDLERS ---
 
 @Client.on_callback_query(filters.regex("help"))
 async def help_handler(client, callback_query):
@@ -143,17 +151,4 @@ async def clone_info_handler(client, callback_query):
         "4. Send: `/clone <token> <channel_id>`"
     )
     buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
-    await callback_query.message.edit_text(text, reply_markup=buttons)
-
-@Client.on_callback_query(filters.regex("my_files"))
-async def my_files_handler(client, callback_query):
-    # Simple placeholder. Usually, this would query DB.
-    # Since you have a Dashboard, we point them there.
-    web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
-    text = "📂 **My Files**\n\nPlease use the **Dashboard** to view and manage your files efficiently."
-    
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 Open Dashboard", web_app=WebAppInfo(url=web_app_url))],
-        [InlineKeyboardButton("🔙 Back", callback_data="start_menu")]
-    ])
     await callback_query.message.edit_text(text, reply_markup=buttons)
