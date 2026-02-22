@@ -8,31 +8,26 @@ from config import Config
 users_col = db.users
 
 # --- STATE MANAGEMENT ---
-# Stores temporary data: {user_id: {"step": "TOKEN", "token": "..."}}
 CLONE_SESSION = {}
 
-# --- HELPER: Extract Channel ID from Link/Text ---
+# --- HELPER: Extract Channel ID ---
 def parse_channel_input(text: str):
     text = text.strip()
     
-    # 0. Check for Invite Links (Unsupported)
     if "t.me/+" in text or "joinchat" in text:
         return "INVITE_LINK_ERROR"
 
-    # 1. Direct ID (e.g., -100123456789)
     if re.match(r"^-100\d+$", text):
         return int(text)
     
-    # 2. Private Post Link (e.g., https://t.me/c/1234567890/5)
     private_link_match = re.search(r"t\.me\/c\/(\d+)\/", text)
     if private_link_match:
         return int(f"-100{private_link_match.group(1)}")
 
-    # 3. Public Username (e.g., @channel or t.me/channel)
     username_match = re.search(r"(?:t\.me\/|@)(\w{5,32})", text)
     if username_match:
         name = username_match.group(1)
-        if name != "c": # Avoid matching the 'c' in private links
+        if name != "c":
             return f"@{name}"
         
     return None
@@ -51,7 +46,7 @@ async def clone_init(client, message):
         reply_markup=ForceReply(selective=True, placeholder="12345:ABC-DEF...")
     )
 
-# --- 2. HANDLE INPUTS (Conversation) ---
+# --- 2. HANDLE INPUTS ---
 @Client.on_message(filters.private & filters.text & ~filters.command(["start", "clone", "stats", "broadcast"]))
 async def clone_wizard_handler(client, message: Message):
     user_id = message.from_user.id
@@ -62,7 +57,6 @@ async def clone_wizard_handler(client, message: Message):
     session = CLONE_SESSION[user_id]
     text = message.text.strip()
 
-    # --- CANCEL COMMAND ---
     if text.lower() == "/cancel":
         del CLONE_SESSION[user_id]
         return await message.reply("🚫 **Operation Cancelled.**")
@@ -86,7 +80,7 @@ async def clone_wizard_handler(client, message: Message):
             reply_markup=ForceReply(selective=True, placeholder="https://t.me/c/...")
         )
 
-    # --- STEP 2: VALIDATE CHANNEL & START BOT ---
+    # --- STEP 2: START BOT ---
     elif session["step"] == "WAIT_CHANNEL":
         channel_input = parse_channel_input(text)
         
@@ -96,50 +90,53 @@ async def clone_wizard_handler(client, message: Message):
         if not channel_input:
             return await message.reply("❌ **Invalid Format.**\nPlease send a valid **Post Link** (e.g., `https://t.me/c/xxx/1`).")
         
-        msg = await message.reply("⚙️ **Verifying Channel Access...**")
+        msg = await message.reply("⚙️ **Starting Bot...**")
         
         try:
             # 1. Start the Clone Bot
-            new_client = await start_clone(session["token"], user_id, channel_input)
+            new_client, error_msg = await start_clone(session["token"], user_id, channel_input)
             
             if not new_client:
-                return await msg.edit("❌ **Error:** The Bot Token seems invalid. Please start over with `/clone`.")
+                # Show the REAL error message from Pyrogram
+                return await msg.edit(f"❌ **Bot Start Error:**\n`{error_msg}`\n\nPlease check your Token and try again with `/clone`.")
+
+            await msg.edit("⚙️ **Verifying Channel Access...**")
 
             # 2. Verify Channel Access
             final_channel_id = None
             try:
                 if isinstance(channel_input, int):
-                    # --- PRIVATE CHANNEL FIX ---
-                    # Since it's a fresh session, the bot doesn't know the private channel yet.
-                    # We iterate through the bot's dialogs to find the channel it was added to.
+                    # Private Channel Fix
                     found = False
                     async for dialog in new_client.get_dialogs():
                         if dialog.chat.id == channel_input:
-                            # Found it! Now we have the access hash implicitly
                             await new_client.send_message(channel_input, "✅ **Database Connected Successfully!**")
                             final_channel_id = channel_input
                             found = True
                             break
                     
                     if not found:
-                        # Attempt one direct send just in case (rarely works for private without cache)
+                        # Attempt direct send (might work if bot was just added)
                         await new_client.send_message(channel_input, "✅ **Database Connected Successfully!**")
                         final_channel_id = channel_input
                 else:
-                    # Public Username (Resolvable)
+                    # Public Username
                     chat_info = await new_client.get_chat(channel_input)
                     final_channel_id = chat_info.id
                     await new_client.send_message(final_channel_id, "✅ **Database Connected Successfully!**")
                 
+                # Update client with resolved ID
+                new_client.log_channel = final_channel_id
+
             except Exception as e:
-                await new_client.stop() 
+                await new_client.stop()
                 return await msg.edit(
                     f"❌ **Channel Access Error:**\n\n"
                     f"The bot could not send a message to the channel.\n\n"
                     "**Troubleshooting:**\n"
                     "1. Is the bot an **Admin** in the channel?\n"
                     "2. Did you copy the link correctly?\n"
-                    "3. **Try this:** Send a message in the channel, wait 5 seconds, then try again.\n\n"
+                    "3. Try sending a message in the channel and wait 5 seconds.\n\n"
                     f"Error: `{e}`"
                 )
 
