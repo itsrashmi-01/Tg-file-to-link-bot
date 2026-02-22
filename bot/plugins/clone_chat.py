@@ -1,7 +1,7 @@
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from pyrogram.errors import PeerIdInvalid, ChannelInvalid, ChatWriteForbidden
+from pyrogram.errors import PeerIdInvalid, ChannelInvalid, ChatWriteForbidden, RPCError
 from bot.clone import start_clone, stop_clone, clones_col
 from config import Config
 
@@ -10,10 +10,6 @@ USER_STATES = {}
 
 # --- HELPER: SMART ID FIXER ---
 def fix_channel_id(raw_id: str) -> int:
-    """
-    Attempts to fix common ID errors.
-    If it's a plain number (e.g. 123456), assumes it's a Supergroup (-100123456).
-    """
     clean_id = str(raw_id).replace(" ", "").strip()
     if not clean_id.lstrip("-").isdigit():
         raise ValueError("Not a number")
@@ -60,8 +56,7 @@ async def cancel_clone(client: Client, callback_query: CallbackQuery):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="start_menu")]])
     )
 
-# --- 3. MESSAGE HANDLER (State Machine) ---
-# We now accept ANY content type (Text, Forwarded, Photo, etc.) to handle forwards
+# --- 3. MESSAGE HANDLER ---
 @Client.on_message(filters.private & ~filters.command("start"))
 async def clone_conversation_handler(client: Client, message: Message):
     user_id = message.from_user.id
@@ -103,23 +98,20 @@ async def clone_conversation_handler(client: Client, message: Message):
     elif step == "WAIT_CHANNEL":
         channel_id = None
         
-        # 1. CHECK FORWARDED MESSAGE (Best Method)
+        # 1. DETECT ID (Forward or Text)
         if message.forward_from_chat:
             channel_id = message.forward_from_chat.id
-            print(f"DEBUG: Detected Forward ID: {channel_id}")
-        
-        # 2. CHECK TEXT INPUT (Fallback)
         elif message.text:
             try:
                 channel_id = fix_channel_id(message.text.strip())
             except ValueError:
-                pass # Will fail below if channel_id is still None
+                pass 
         
         if not channel_id:
             await message.reply(
                 "❌ **Could not detect Channel ID.**\n\n"
                 "Please **Forward a message** from your Log Channel to me.\n"
-                "Make sure I am allowed to see forwards from that channel."
+                "Make sure the bot is an Admin so I can see the ID."
             )
             return
 
@@ -136,7 +128,32 @@ async def clone_conversation_handler(client: Client, message: Message):
 
             bot_info = await client_instance.get_me()
             
-            # 2. TEST CONNECTION
+            # 2. CRITICAL FIX: CACHE HANDSHAKE
+            # We explicitly 'get_chat' to force Pyrogram to resolve the Peer ID
+            # This fixes "Peer id invalid" for fresh sessions.
+            try:
+                chat_info = await client_instance.get_chat(channel_id)
+                # Optional: Double check if bot is admin
+                # permissions = chat_info.permissions ...
+            except PeerIdInvalid:
+                await stop_clone(user_id)
+                await status_msg.edit_text(
+                    f"❌ **Access Denied (Peer Invalid)**\n\n"
+                    f"The bot @{bot_info.username} cannot see the channel `{channel_id}`.\n\n"
+                    "**Solution:**\n"
+                    "1. Go to your Channel.\n"
+                    "2. Remove the bot and **Add it again** as Admin.\n"
+                    "3. Send a message in the channel.\n"
+                    "4. Try again here."
+                )
+                return
+            except Exception as e:
+                # If get_chat fails, we can't proceed
+                await stop_clone(user_id)
+                await status_msg.edit_text(f"❌ **Connection Error:** `{str(e)}`\nMake sure the bot is an Admin.")
+                return
+
+            # 3. TEST SENDING MESSAGE
             try:
                 await client_instance.send_message(
                     channel_id,
@@ -152,18 +169,8 @@ async def clone_conversation_handler(client: Client, message: Message):
                     "👉 Please ensure your bot is an **Admin** with 'Post Messages' rights."
                  )
                  return
-            except Exception as e:
-                # If forward worked but connection failed, it's likely a weird edge case
-                await stop_clone(user_id)
-                await status_msg.edit_text(
-                    f"❌ **Connection Failed!**\n\n"
-                    f"Error: `{str(e)}`\n"
-                    f"ID: `{channel_id}`\n\n"
-                    "Please ensure the bot is an **Administrator** in the channel."
-                )
-                return
-
-            # 3. SUCCESS
+            
+            # 4. SUCCESS - SAVE TO DB
             await clones_col.insert_one({
                 "user_id": user_id,
                 "token": token,
