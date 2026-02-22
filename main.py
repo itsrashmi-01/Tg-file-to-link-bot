@@ -1,73 +1,97 @@
-import uvicorn
 import os
-import asyncio
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from config import Config
-from bot_client import tg_bot
-from bot.server import auth_routes
-from bot.clone import load_all_clones
+import sys
 
-# --- BACKGROUND TASK WRAPPER ---
-async def start_bot_services():
-    """Starts the bot and loads clones without blocking the Web Server."""
+# --- FORCE UNBUFFERED OUTPUT (So you see logs immediately) ---
+sys.stdout.reconfigure(encoding='utf-8')
+
+print("⏳ Initializing Application...")
+
+try:
+    import asyncio
+    import uvicorn
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from contextlib import asynccontextmanager
+    
+    print("✅ Libraries Imported.")
+
+    # Check Config Imports (Common Crash Point)
     try:
-        print("🚀 Starting Telegram Bot...")
-        await tg_bot.start()
-        me = await tg_bot.get_me()
-        print(f"✅ Main Bot Started: @{me.username}")
-        
-        print("♻️ Loading Clone Bots...")
-        await load_all_clones()
-        print("✅ All Clones Loaded.")
+        from config import Config
+        print("✅ Config Loaded.")
     except Exception as e:
-        print(f"❌ Bot Startup Error: {e}")
+        print(f"❌ CRITICAL ERROR: Config Import Failed. Check Env Vars.\nError: {e}")
+        sys.exit(1)
 
-# --- LIFESPAN MANAGER ---
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Run bot startup as a background task so it doesn't block the Port binding
-    asyncio.create_task(start_bot_services())
-    
-    yield # The Web Server starts listening HERE
-    
-    # Shutdown logic
-    print("🛑 Stopping Bot...")
+    # Check Bot Imports
     try:
-        await tg_bot.stop()
-    except:
-        pass
+        from bot_client import tg_bot
+        from bot.server import auth_routes
+        from bot.clone import load_all_clones
+        print("✅ Bot Modules Loaded.")
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR: Bot Module Import Failed.\nError: {e}")
+        sys.exit(1)
 
-# --- FASTAPI APP ---
-app = FastAPI(lifespan=lifespan)
+    # --- BACKGROUND TASK ---
+    async def start_bot_services():
+        """Starts the bot in background without blocking Web Server"""
+        try:
+            print("🚀 Starting Telegram Bot...")
+            await tg_bot.start()
+            me = await tg_bot.get_me()
+            print(f"✅ Main Bot Started: @{me.username}")
+            
+            print("♻️ Loading Clone Bots...")
+            await load_all_clones()
+            print("✅ Clones Ready.")
+        except Exception as e:
+            print(f"⚠️ BOT STARTUP FAILED (Web Server still running): {e}")
 
-# CORS (Allow Web App Access)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # --- LIFESPAN MANAGER ---
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Start Bot in Background
+        asyncio.create_task(start_bot_services())
+        yield
+        # Stop Bot
+        try:
+            print("🛑 Stopping Bot...")
+            await tg_bot.stop()
+        except:
+            pass
 
-# Include Routes
-app.include_router(auth_routes.router)
+    # --- FASTAPI APP ---
+    app = FastAPI(lifespan=lifespan)
 
-@app.get("/")
-async def health_check():
-    return {"status": "active", "service": "Cloud Manager Bot"}
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(auth_routes.router)
+
+    @app.get("/")
+    async def health_check():
+        return {"status": "active", "service": "Cloud Manager Bot"}
+
+except Exception as e:
+    print(f"❌ GLOBAL CRASH: {e}")
+    sys.exit(1)
 
 if __name__ == "__main__":
-    # --- CRITICAL FOR RENDER DEPLOYMENT ---
-    # 1. Listen on 0.0.0.0 (External Access)
-    # 2. Use the PORT environment variable provided by Render
-    port = int(os.environ.get("PORT", 8080))
-    
-    print(f"🌍 Starting Web Server on Port {port}...")
-    uvicorn.run(
-        "main:app", 
-        host="0.0.0.0", 
-        port=port, 
-        log_level="info"
-    )
+    try:
+        port = int(os.environ.get("PORT", 8080))
+        print(f"🌍 Starting Web Server on 0.0.0.0:{port}...")
+        
+        uvicorn.run(
+            "main:app", 
+            host="0.0.0.0", 
+            port=port, 
+            log_level="info"
+        )
+    except Exception as e:
+        print(f"❌ SERVER START ERROR: {e}")
