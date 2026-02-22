@@ -1,11 +1,9 @@
 import aiohttp
-from pyrogram import Client
 from pyrogram.errors import UserNotParticipant
 from config import Config
 
-# --- EXISTING CODE ---
 class TgFileStreamer:
-    def __init__(self, client: Client, file_id: str, start_offset: int = 0):
+    def __init__(self, client, file_id, start_offset=0):
         self.client = client
         self.file_id = file_id
         self.offset = start_offset
@@ -30,12 +28,29 @@ async def is_subscribed(client, user_id):
         print(f"FSub Error: {e}")
         return True
 
-# --- NEW FUNCTION ---
-async def get_tinyurl(long_url):
-    url = f"http://tinyurl.com/api-create.php?url={long_url}"
+# --- IMPROVED SHORTENER HELPER ---
+async def get_short_link(long_url):
+    if not Config.SHORTENER_URL or not Config.SHORTENER_API:
+        return long_url # Return original if configs are missing
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                return await response.text()
-    except Exception:
-        return long_url # Fallback to original if failed
+            api_url = f"{Config.SHORTENER_URL}?api={Config.SHORTENER_API}&url={long_url}"
+            async with session.get(api_url) as response:
+                data = await response.json()
+                
+                # Check for various success keys used by different shorteners
+                if "shortenedUrl" in data:
+                    return data["shortenedUrl"]
+                elif "short_url" in data:
+                    return data["short_url"]
+                elif "url" in data:
+                    return data["url"]
+                
+                # If API returns an error message
+                print(f"Shortener API Error: {data}")
+                return long_url
+                
+    except Exception as e:
+        print(f"Shortener Connection Error: {e}")
+        return long_url
