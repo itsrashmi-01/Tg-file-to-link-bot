@@ -7,6 +7,25 @@ from config import Config
 # Dictionary to store user states temporarily
 USER_STATES = {}
 
+# --- HELPER: SMART ID FIXER ---
+def fix_channel_id(raw_id: str) -> int:
+    """
+    Attempts to fix common ID errors for private channels.
+    1. Removes spaces.
+    2. If it's a large positive number (common copy-paste error), adds -100.
+    """
+    clean_id = str(raw_id).replace(" ", "").strip()
+    
+    # Check if it is a number
+    if not clean_id.lstrip("-").isdigit():
+        raise ValueError("Not a number")
+
+    # If it's a positive number and long (likely a channel ID missing prefix)
+    if clean_id.isdigit() and len(clean_id) > 9:
+        return int(f"-100{clean_id}")
+    
+    return int(clean_id)
+
 # --- 1. ENTRY POINT ---
 @Client.on_callback_query(filters.regex("clone_info"))
 async def start_clone_process(client: Client, callback_query: CallbackQuery):
@@ -73,8 +92,10 @@ async def clone_conversation_handler(client: Client, message: Message):
             "**Step 2:**\n"
             "• Create a **Private Channel** (Log Channel).\n"
             "• Add your new bot to that channel as an **Administrator**.\n"
-            "• Send me the **Channel ID** (e.g., `-100123456789`).\n\n"
-            "__Tip: Use @idbot to get the ID.__",
+            "• Send me the **Channel ID**.\n\n"
+            "**⚠️ IMPORTANT:**\n"
+            "Private Channel IDs must start with `-100`.\n"
+            "Example: `-1001234567890`",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("❌ Cancel", callback_data="cancel_clone")]
             ])
@@ -85,13 +106,16 @@ async def clone_conversation_handler(client: Client, message: Message):
         raw_id = message.text.strip()
         
         try:
-            channel_id = int(raw_id)
+            # Attempt to fix the ID automatically
+            channel_id = fix_channel_id(raw_id)
         except ValueError:
-            await message.reply("❌ **Invalid ID.** It must be a number (e.g., `-100xxxx`).")
+            await message.reply("❌ **Invalid ID.** Please send a numeric ID (e.g., `-100xxxx`).")
             return
 
         token = state["token"]
-        status_msg = await message.reply("⚙️ **Booting up...** Verifying Token and Channel...")
+        # Inform user if we auto-fixed the ID
+        fix_msg = f" (Auto-fixed to `{channel_id}`)" if str(channel_id) != raw_id else ""
+        status_msg = await message.reply(f"⚙️ **Booting up...**\nVerifying ID{fix_msg}...")
 
         # --- CALL THE CLONE FUNCTION ---
         try:
@@ -101,7 +125,7 @@ async def clone_conversation_handler(client: Client, message: Message):
             if client_instance:
                 bot_info = await client_instance.get_me()
                 
-                # 2. TEST CONNECTION: Send "Databases Connected" Msg
+                # 2. TEST CONNECTION: Send Msg to Log Channel
                 try:
                     await client_instance.send_message(
                         channel_id,
@@ -110,19 +134,21 @@ async def clone_conversation_handler(client: Client, message: Message):
                         "Your Clone Bot is now linked to this Log Channel."
                     )
                 except Exception as e:
-                    # IF FAIL: Stop bot, don't save to DB, warn user.
+                    # IF FAIL: Stop bot, don't save, show EXACT error
                     await stop_clone(user_id)
                     await status_msg.edit_text(
-                        "❌ **Connection Failed!**\n\n"
-                        "I could not send a message to the Log Channel.\n"
-                        "1. Is the **Channel ID** correct?\n"
-                        "2. Is the bot an **Admin** in that channel?\n\n"
-                        "Please check and try again.",
+                        f"❌ **Connection Failed!**\n\n"
+                        f"**Error Details:**\n`{str(e)}`\n\n"
+                        f"**Attempted Channel ID:** `{channel_id}`\n\n"
+                        "**Checklist:**\n"
+                        "1. Is the ID correct? (Did you copy it from a URL?)\n"
+                        "2. Is the bot an **Admin** in the channel?\n"
+                        "3. Does the bot have 'Post Messages' permission?",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_clone")]
                         ])
                     )
-                    return # Do not proceed to save
+                    return # Stop here
                 
                 # 3. IF SUCCESS: Save to MongoDB
                 await clones_col.insert_one({
@@ -136,8 +162,7 @@ async def clone_conversation_handler(client: Client, message: Message):
                 await status_msg.edit_text(
                     f"✅ **Success! Your bot is online.**\n\n"
                     f"🤖 **Bot:** @{bot_info.username}\n"
-                    f"📡 **Log Channel:** Connected\n"
-                    f"📨 **Test Message:** Sent\n\n"
+                    f"📡 **Log Channel:** Connected `{channel_id}`\n\n"
                     f"__Click /start in your new bot to begin.__"
                 )
                 del USER_STATES[user_id]
@@ -145,5 +170,5 @@ async def clone_conversation_handler(client: Client, message: Message):
                 await status_msg.edit_text("❌ **Failed to start.** Invalid Bot Token.")
                 
         except Exception as e:
-            await status_msg.edit_text(f"❌ **Error:** `{str(e)}`")
+            await status_msg.edit_text(f"❌ **System Error:** `{str(e)}`")
             del USER_STATES[user_id]
