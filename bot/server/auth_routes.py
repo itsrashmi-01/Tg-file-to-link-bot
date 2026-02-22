@@ -15,7 +15,7 @@ router = APIRouter()
 users_col = db.users
 files_col = db.files
 auth_codes_col = db.auth_codes
-clones_col = db.clones # <--- New Collection Access
+clones_col = db.clones
 
 class AuthData(BaseModel):
     initData: str
@@ -25,6 +25,7 @@ class FileAction(BaseModel):
     file_id: str
     new_name: str = ""
 
+# --- VALIDATION HELPER ---
 def validate_telegram_data(init_data: str) -> dict:
     try:
         parsed_data = dict(item.split("=", 1) for item in unquote(init_data).split("&"))
@@ -36,6 +37,7 @@ def validate_telegram_data(init_data: str) -> dict:
         return json.loads(parsed_data["user"])
     except: return None
 
+# --- AUTH ROUTES ---
 @router.get("/api/auth/generate_token")
 async def generate_token():
     token = str(uuid.uuid4())
@@ -64,6 +66,7 @@ async def login(data: AuthData):
     await users_col.update_one({"user_id": user_id}, {"$set": {"first_name": user.get("first_name")}}, upsert=True)
     return {"success": True, "user": user, "role": "admin" if user_id in Config.ADMIN_IDS else "user"}
 
+# --- DASHBOARD ROUTES ---
 @router.get("/api/dashboard/user")
 async def get_user_dashboard(user_id: int):
     # 1. Stats
@@ -83,19 +86,18 @@ async def get_user_dashboard(user_id: int):
             "link": f"{Config.BASE_URL}/dl/{doc.get('log_msg_id')}"
         })
         
-    # 3. Clone Bot Info (Updated Logic)
+    # 3. Clone Bot Info
     clone_info = await clones_col.find_one({"user_id": user_id})
     clone_data = None
     if clone_info:
         clone_data = {
             "username": clone_info.get("username"),
-            # Don't send token for security
         }
         
     return {
         "files": files, 
         "stats": {"used_storage": total_size, "total_files": total_count},
-        "clone_bot": clone_data # <--- Sending to Frontend
+        "clone_bot": clone_data
     }
 
 @router.get("/api/search")
@@ -115,6 +117,7 @@ async def search_files(user_id: int, query: str):
         })
     return {"files": files}
 
+# --- FILE ACTIONS ---
 @router.post("/api/file/rename")
 async def rename_file(data: FileAction):
     result = await files_col.update_one(
@@ -133,17 +136,18 @@ async def delete_file(data: FileAction):
         return {"success": True}
     return {"success": False}
 
-@router.get("/api/dashboard/admin")
-async def get_admin_dashboard(user_id: int):
-    if user_id not in Config.ADMIN_IDS: raise HTTPException(status_code=403)
-    return {"stats": {"total_users": await users_col.count_documents({}), "total_files": await files_col.count_documents({})}}
+# --- CLONE ACTIONS (New) ---
+@router.post("/api/clone/delete")
+async def delete_clone(data: dict):
+    user_id = data.get("user_id")
+    await clones_col.delete_one({"user_id": user_id})
+    return {"success": True}
 
-# Settings Endpoints
+# --- SETTINGS ---
 @router.get("/api/settings/get")
 async def get_settings(user_id: int):
     user = await users_col.find_one({"user_id": user_id})
-    if user:
-        return {"use_shortener": user.get("use_short", False)}
+    if user: return {"use_shortener": user.get("use_short", False)}
     return {"use_shortener": False}
 
 @router.post("/api/settings/update")
