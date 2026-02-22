@@ -1,68 +1,94 @@
 import asyncio
-import time
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
-from bot.clone import db
+from bot.utils import is_subscribed
+from bot.clone import db 
 
+files_col = db.files # Access DB
+
+# Global Dictionary for Batching: { media_group_id: [messages] }
 BATCH_DATA = {}
 
-def get_log_channel(client):
-    if hasattr(client, "log_channel") and client.log_channel: return client.log_channel
-    if Config.LOG_CHANNEL_ID: return int(Config.LOG_CHANNEL_ID)
-    return None
-
-def get_file_buttons(msg_id, link):
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Open Link", url=link), InlineKeyboardButton("📤 Share", url=f"https://t.me/share/url?url={link}")]])
-
-@Client.on_message((filters.document | filters.video | filters.audio | filters.photo) & filters.private)
+@Client.on_message((filters.document | filters.video | filters.audio) & filters.private)
 async def file_handler(client, message):
-    try:
-        from bot.plugins.commands import CLONE_SESSION
-        if message.from_user.id in CLONE_SESSION: return 
-    except: pass
+    # --- 1. Force Subscribe Check ---
+    if not await is_subscribed(client, message.from_user.id):
+        return await message.reply_text(
+            "⚠️ **You must join our channel to use this bot!**",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Join Channel", url=Config.FORCE_SUB_URL)],
+                [InlineKeyboardButton("Try Again", url=f"https://t.me/{client.me.username}?start=start")]
+            ])
+        )
+
+    # --- 2. Batch Processing Logic ---
     if message.media_group_id:
+        # If this is part of an album
         mg_id = message.media_group_id
         if mg_id not in BATCH_DATA:
             BATCH_DATA[mg_id] = []
-            asyncio.create_task(process_batch(client, mg_id, message.chat.id, message.from_user.id))
+            asyncio.create_task(process_batch(client, mg_id, message.chat.id))
+        
         BATCH_DATA[mg_id].append(message)
         return
+
+    # Normal Single File Processing
     await process_file(client, message)
 
-async def process_batch(client, mg_id, chat_id, user_id):
-    await asyncio.sleep(4)
+async def process_batch(client, mg_id, chat_id):
+    await asyncio.sleep(4) # Wait for all files in album to arrive
     messages = BATCH_DATA.pop(mg_id, [])
-    target_channel = get_log_channel(client)
-    if not target_channel: return await client.send_message(chat_id, "❌ **Error:** No DB Channel.")
-    links = ""
+    
+    links_text = "**📦 Batch Links:**\n\n"
+    
     for msg in messages:
-        try:
-            media = msg.document or msg.video or msg.audio or msg.photo
-            if not media: continue
-            file_name = getattr(media, "file_name", "Photo.jpg")
-            file_size = getattr(media, "file_size", 0)
-            log_msg = await msg.copy(chat_id=target_channel)
-            await save_file_to_db(msg, log_msg, media, file_name, file_size)
-            base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
-            links += f"• [{file_name}]({base_link})\n"
-        except: pass
-    await client.send_message(chat_id, f"**Batch Links:**\n{links}", disable_web_page_preview=True)
+        # Forward to Log Channel
+        log_msg = await msg.copy(chat_id=Config.LOG_CHANNEL_ID)
+        
+        # --- SAVE TO DB (History) ---
+        media = msg.document or msg.video or msg.audio
+        await files_col.insert_one({
+            "user_id": msg.from_user.id,
+            "log_msg_id": log_msg.id,
+            "file_name": getattr(media, "file_name", "file"),
+            "file_size": getattr(media, "file_size", 0),
+            "file_unique_id": media.file_unique_id,
+            "timestamp": msg.date
+        })
+        # ----------------------------
+
+        link = f"{Config.BASE_URL}/dl/{log_msg.id}"
+        fname = getattr(media, "file_name", "File")
+        links_text += f"• [{fname}]({link})\n"
+    
+    await client.send_message(chat_id, links_text, disable_web_page_preview=True)
 
 async def process_file(client, message):
     try:
-        target_channel = get_log_channel(client)
-        if not target_channel: return await message.reply("❌ **Error:** No DB Channel Configured.")
-        media = message.document or message.video or message.audio or message.photo
-        file_name = getattr(media, "file_name", "Photo.jpg") if not message.photo else f"Photo_{message.id}.jpg"
-        file_size = getattr(media, "file_size", 0)
-        log_msg = await message.copy(chat_id=target_channel)
-        await save_file_to_db(message, log_msg, media, file_name, file_size)
-        base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
-        await message.reply_text(f"✅ **Link:** `{base_link}`", reply_markup=get_file_buttons(log_msg.id, base_link))
-    except Exception as e:
-        await message.reply_text(f"❌ Error: `{e}`")
+        log_msg = await message.copy(chat_id=Config.LOG_CHANNEL_ID)
+        
+        # --- SAVE TO DB (History) ---
+        media = message.document or message.video or message.audio
+        await files_col.insert_one({
+            "user_id": message.from_user.id,
+            "log_msg_id": log_msg.id,
+            "file_name": getattr(media, "file_name", "file"),
+            "file_size": getattr(media, "file_size", 0),
+            "file_unique_id": media.file_unique_id,
+            "timestamp": message.date
+        })
+        # ----------------------------
 
-async def save_file_to_db(user_msg, log_msg, media, file_name, file_size):
-    unique_id = getattr(media, "file_unique_id", None) or getattr(media, "file_id", None)
-    await db.files.insert_one({"user_id": user_msg.from_user.id, "log_msg_id": log_msg.id, "file_name": file_name, "file_size": file_size, "file_unique_id": unique_id, "timestamp": time.time()})
+        if Config.BLOGGER_URL:
+            stream_link = f"{Config.BLOGGER_URL}?id={log_msg.id}"
+        else:
+            stream_link = f"{Config.BASE_URL}/dl/{log_msg.id}"
+        
+        await message.reply_text(
+            f"**File Name:** `{getattr(media, 'file_name', 'File')}`\n"
+            f"**Download Link:**\n{stream_link}",
+            quote=True
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {e}")

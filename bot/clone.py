@@ -1,74 +1,35 @@
 import asyncio
+from pyrogram import Client
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import Config
 
-class LazyMotorClient:
-    def __init__(self):
-        self._client = None
-        self._db = None
+db = AsyncIOMotorClient(Config.MONGO_URL).TelegramBot
+clones_col = db.clones
+RUNNING_CLONES = {}
 
-    @property
-    def client(self):
-        if self._client is None:
-            # Connect only when actually accessed
-            self._client = AsyncIOMotorClient(Config.MONGO_URL)
-        return self._client
-
-    @property
-    def db(self):
-        if self._db is None:
-            self._db = self.client[Config.DB_NAME]
-        return self._db
-
-    def __getattr__(self, name):
-        return getattr(self.db, name)
-    
-    def __getitem__(self, name):
-        return self.db[name]
-
-# Create global instance
-db = LazyMotorClient()
-
-# --- CLONE LOGIC ---
-CLONE_BOTS = {}
-
-async def start_clone(token, user_id, log_channel):
+async def start_clone(token, user_id):
     try:
-        from pyrogram import Client
-        session_name = f":memory:{user_id}"
+        # Clones use 'memory' session to keep container stateless
         client = Client(
-            session_name,
+            name=f":memory:{user_id}",
             api_id=Config.API_ID,
             api_hash=Config.API_HASH,
             bot_token=token,
-            plugins=dict(root="bot/plugins"),
-            in_memory=True
+            in_memory=True,
+            plugins=dict(root="bot/plugins") # Shares plugins with main bot
         )
-        client.log_channel = log_channel 
-        client.owner_id = int(user_id)
         await client.start()
-        CLONE_BOTS[user_id] = client
-        return client, None
+        me = await client.get_me()
+        
+        # Store running instance
+        RUNNING_CLONES[me.id] = client
+        print(f"   🚀 Clone Started: @{me.username}")
+        return me
     except Exception as e:
-        return None, str(e)
-
-async def stop_clone(user_id):
-    if user_id in CLONE_BOTS:
-        try: await CLONE_BOTS[user_id].stop()
-        except: pass
-        del CLONE_BOTS[user_id]
+        print(f"   ❌ Failed to start clone {user_id}: {e}")
+        return None
 
 async def load_all_clones():
-    print("♻️ Loading Clones...")
-    count = 0
-    try:
-        async for doc in db.clones.find():
-            token = doc.get("token")
-            user_id = doc.get("user_id")
-            log_channel = doc.get("log_channel")
-            if token and user_id:
-                client, err = await start_clone(token, user_id, log_channel)
-                if client: count += 1
-    except Exception as e:
-        print(f"⚠️ Error loading clones: {e}")
-    print(f"✅ Loaded {count} Clones.")
+    print("🤖 Loading Clones...")
+    async for doc in clones_col.find():
+        await start_clone(doc['token'], doc['user_id'])
