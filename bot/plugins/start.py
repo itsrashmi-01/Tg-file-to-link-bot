@@ -1,15 +1,15 @@
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from bot.clone import db
+from bot.clone import db, clones_col, stop_clone
 from config import Config
 
 # Database Collections
 users_col = db.users
 auth_codes_col = db.auth_codes
 
-# --- HELPER: Get Start Menu Content ---
-def get_start_menu(first_name):
+# --- HELPER: Get Start Menu Content (Now Async) ---
+async def get_start_menu(user_id, first_name):
     web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
     
     # Logic to append query parameter safely
@@ -23,17 +23,23 @@ def get_start_menu(first_name):
         "⚙️ **New:** Go to **Settings** to turn on/off TinyURL shortener."
     )
 
+    # --- CHECK FOR EXISTING CLONE ---
+    user_bot = await clones_col.find_one({"user_id": user_id})
+    
+    if user_bot:
+        # If user has a bot -> Show "Manage"
+        clone_btn = InlineKeyboardButton("🤖 Manage Your Bot", callback_data="manage_clone")
+    else:
+        # If no bot -> Show "Create"
+        clone_btn = InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")
+
     buttons = InlineKeyboardMarkup([
-        # Main Dashboard Button
         [InlineKeyboardButton("🚀 My Dashboard", web_app=WebAppInfo(url=web_app_url))],
-        
-        # 'My Files' now opens the Web App directly to the files tab
         [
             InlineKeyboardButton("📂 My Files", web_app=WebAppInfo(url=files_url)), 
             InlineKeyboardButton("⚙️ Settings", callback_data="settings")
         ],
-        
-        [InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")],
+        [clone_btn], # Dynamic Button
         [InlineKeyboardButton("❓ Help", callback_data="help"), InlineKeyboardButton("ℹ️ About", callback_data="about")]
     ])
     return text, buttons
@@ -67,8 +73,51 @@ async def start_handler(client, message):
         )
     except: pass
 
-    text, buttons = get_start_menu(message.from_user.first_name)
+    # Await the async menu generator
+    text, buttons = await get_start_menu(message.from_user.id, message.from_user.first_name)
     await message.reply_text(text, reply_markup=buttons, quote=True)
+
+# --- MANAGE CLONE HANDLER ---
+
+@Client.on_callback_query(filters.regex("manage_clone"))
+async def manage_clone_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    user_bot = await clones_col.find_one({"user_id": user_id})
+    
+    if not user_bot:
+        await callback_query.answer("⚠️ Bot not found!", show_alert=True)
+        return await back_to_start(client, callback_query)
+
+    username = user_bot.get('username', 'Unknown')
+    token_masked = user_bot.get('token', '******')[:10] + "..."
+    
+    text = (
+        f"🤖 **Your Clone Bot Manager**\n\n"
+        f"👤 **Name:** {user_bot.get('first_name', 'Unknown')}\n"
+        f"🔗 **Username:** @{username}\n"
+        f"🆔 **Log Channel:** `{user_bot.get('log_channel')}`\n"
+        f"🔑 **Token:** `{token_masked}`\n\n"
+        f"__What would you like to do?__"
+    )
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 Delete Bot", callback_data="delete_clone_confirm")],
+        [InlineKeyboardButton("🔙 Back", callback_data="start_menu")]
+    ])
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+@Client.on_callback_query(filters.regex("delete_clone_confirm"))
+async def delete_clone_confirm_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    
+    # Stop the running bot instance
+    await stop_clone(user_id)
+    
+    # Remove from DB
+    await clones_col.delete_one({"user_id": user_id})
+    
+    await callback_query.answer("✅ Bot deleted successfully!", show_alert=True)
+    await back_to_start(client, callback_query)
 
 # --- SETTINGS & TOGGLE LOGIC ---
 
@@ -112,8 +161,11 @@ async def toggle_short_handler(client, callback_query):
 
 @Client.on_callback_query(filters.regex("start_menu"))
 async def back_to_start(client, callback_query):
+    user_id = callback_query.from_user.id
     first_name = callback_query.from_user.first_name
-    text, buttons = get_start_menu(first_name)
+    
+    # Await the async menu generator
+    text, buttons = await get_start_menu(user_id, first_name)
     await callback_query.message.edit_text(text, reply_markup=buttons)
 
 # --- INFO HANDLERS ---
@@ -139,4 +191,6 @@ async def about_handler(client, callback_query):
     )
     buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
     await callback_query.message.edit_text(text, reply_markup=buttons)
-    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+# Note: The 'clone_info' handler is now managed in bot/plugins/clone_chat.py
+# If you haven't added that file yet, ensure you add a placeholder or the full file.
