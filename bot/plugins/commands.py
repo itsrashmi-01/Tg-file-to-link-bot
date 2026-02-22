@@ -104,14 +104,15 @@ async def clone_wizard_handler(client, message: Message):
             # 2. Verify Channel Access
             final_channel_id = None
             try:
-                # Attempt to get chat info first (works for IDs if bot is admin)
+                # FIXED: Use get_chat instead of get_dialogs
+                # get_chat works for Private Channel IDs if the bot is an Admin
                 chat_info = await new_client.get_chat(channel_input)
                 final_channel_id = chat_info.id
                 
-                # Send Test Message
+                # Send Test Message to confirm Write Access
                 await new_client.send_message(final_channel_id, "✅ **Database Connected Successfully!**")
                 
-                # Update client with resolved ID (important if input was username)
+                # Update client with resolved ID
                 new_client.log_channel = final_channel_id
 
             except Exception as e:
