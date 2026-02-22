@@ -1,7 +1,7 @@
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from bot.clone import db
+from bot.clone import db, clones_col  # Import clones_col to check for existing bots
 from config import Config
 
 # Database Collections
@@ -48,7 +48,17 @@ async def start_handler(client, message):
     except Exception:
         pass
 
-    # --- 3. GENERATE WEB APP URL ---
+    # --- 3. CHECK FOR EXISTING CLONE ---
+    user_clone = await clones_col.find_one({"user_id": message.from_user.id})
+    
+    if user_clone:
+        clone_btn_text = "🤖 Manage Your Bot"
+        clone_btn_callback = "manage_clone"
+    else:
+        clone_btn_text = "🤖 Create Your Own Bot"
+        clone_btn_callback = "clone_info"
+
+    # --- 4. GENERATE WEB APP URL ---
     base_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
     
     # Ensure client.me exists
@@ -63,12 +73,15 @@ async def start_handler(client, message):
     sep = "&" if "?" in base_url else "?"
     web_app_url = f"{base_url}{sep}bot_id={bot_id}"
 
-    # --- 4. SEND WELCOME MESSAGE ---
+    # --- 5. SEND WELCOME MESSAGE ---
     text = (
         f"👋 **Hi {message.from_user.first_name}!**\n\n"
         "I am a **File Store & Link Generator Bot**.\n"
         "Send me any file to get a direct download link.\n\n"
-        "🤖 **Clone Bot:** Use /clone to create your own."
+        "**Features:**\n"
+        "• Fast Cloud Storage\n"
+        "• Direct Streaming Links\n"
+        "• Create your own Clone Bot"
     )
 
     buttons = InlineKeyboardMarkup([
@@ -80,7 +93,7 @@ async def start_handler(client, message):
             InlineKeyboardButton("⚙️ Settings", callback_data="settings")
         ],
         [
-            InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")
+            InlineKeyboardButton(clone_btn_text, callback_data=clone_btn_callback)
         ],
         [
             InlineKeyboardButton("❓ Help", callback_data="help"),
@@ -92,6 +105,27 @@ async def start_handler(client, message):
 
 
 # --- CALLBACK HANDLERS ---
+
+@Client.on_callback_query(filters.regex("manage_clone"))
+async def manage_clone_callback(client, callback_query):
+    user_clone = await clones_col.find_one({"user_id": callback_query.from_user.id})
+    
+    if not user_clone:
+        await callback_query.answer("Clone not found!", show_alert=True)
+        return
+
+    text = (
+        f"🤖 **Your Clone Bot Details**\n\n"
+        f"👤 **Bot Username:** @{user_clone.get('username', 'Unknown')}\n"
+        f"📢 **Connected Channel:** `{user_clone.get('log_channel', 'Unknown')}`\n\n"
+        "⚠️ **To Delete or Re-make:**\n"
+        "Use the **Dashboard** settings or simply create a new one using `/clone` command (it will overwrite this one)."
+    )
+    
+    await callback_query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_menu")]])
+    )
 
 @Client.on_callback_query(filters.regex("clone_info"))
 async def clone_info_callback(client, callback_query):
