@@ -20,10 +20,12 @@ def parse_channel_input(text: str):
     if re.match(r"^-100\d+$", text):
         return int(text)
     
+    # Private Post Link (e.g. t.me/c/123456/1 -> -100123456)
     private_link_match = re.search(r"t\.me\/c\/(\d+)\/", text)
     if private_link_match:
         return int(f"-100{private_link_match.group(1)}")
 
+    # Public Username
     username_match = re.search(r"(?:t\.me\/|@)(\w{5,32})", text)
     if username_match:
         name = username_match.group(1)
@@ -80,63 +82,47 @@ async def clone_wizard_handler(client, message: Message):
             reply_markup=ForceReply(selective=True, placeholder="https://t.me/c/...")
         )
 
-    # --- STEP 2: START BOT ---
+    # --- STEP 2: START BOT & VERIFY CHANNEL ---
     elif session["step"] == "WAIT_CHANNEL":
         channel_input = parse_channel_input(text)
         
         if channel_input == "INVITE_LINK_ERROR":
-            return await message.reply("❌ **Invite Links are NOT supported!**\nPlease send a **Post Link** or **Channel ID**.")
+            return await message.reply("❌ **Invite Links are NOT supported!**\nPlease send a **Post Link**.")
 
         if not channel_input:
             return await message.reply("❌ **Invalid Format.**\nPlease send a valid **Post Link** (e.g., `https://t.me/c/xxx/1`).")
         
-        msg = await message.reply("⚙️ **Starting Bot...**")
+        msg = await message.reply("⚙️ **Verifying Channel Access...**")
         
         try:
             # 1. Start the Clone Bot
             new_client, error_msg = await start_clone(session["token"], user_id, channel_input)
             
             if not new_client:
-                # Show the REAL error message from Pyrogram
-                return await msg.edit(f"❌ **Bot Start Error:**\n`{error_msg}`\n\nPlease check your Token and try again with `/clone`.")
-
-            await msg.edit("⚙️ **Verifying Channel Access...**")
+                return await msg.edit(f"❌ **Error:** The Bot Token seems invalid.\nError: `{error_msg}`")
 
             # 2. Verify Channel Access
             final_channel_id = None
             try:
-                if isinstance(channel_input, int):
-                    # Private Channel Fix
-                    found = False
-                    async for dialog in new_client.get_dialogs():
-                        if dialog.chat.id == channel_input:
-                            await new_client.send_message(channel_input, "✅ **Database Connected Successfully!**")
-                            final_channel_id = channel_input
-                            found = True
-                            break
-                    
-                    if not found:
-                        # Attempt direct send (might work if bot was just added)
-                        await new_client.send_message(channel_input, "✅ **Database Connected Successfully!**")
-                        final_channel_id = channel_input
-                else:
-                    # Public Username
-                    chat_info = await new_client.get_chat(channel_input)
-                    final_channel_id = chat_info.id
-                    await new_client.send_message(final_channel_id, "✅ **Database Connected Successfully!**")
+                # Attempt to get chat info first (works for IDs if bot is admin)
+                chat_info = await new_client.get_chat(channel_input)
+                final_channel_id = chat_info.id
                 
-                # Update client with resolved ID
+                # Send Test Message
+                await new_client.send_message(final_channel_id, "✅ **Database Connected Successfully!**")
+                
+                # Update client with resolved ID (important if input was username)
                 new_client.log_channel = final_channel_id
 
             except Exception as e:
                 await new_client.stop()
                 return await msg.edit(
                     f"❌ **Channel Access Error:**\n\n"
-                    f"The bot could not send a message to the channel.\n\n"
-                    "**Troubleshooting:**\n"
-                    "1. Is the bot an **Admin** in the channel?\n"
-                    "2. Did you copy the link correctly?\n"
-                    "3. Try sending a message in the channel and wait 5 seconds.\n\n"
+                    f"The bot could not verify access to the channel.\n\n"
+                    "**Possible Fixes:**\n"
+                    "1. Ensure the Clone Bot is an **Admin** in the channel.\n"
+                    "2. If it's a private channel, you might need to send a message **in the channel** first so the bot registers it.\n"
+                    "3. Try sending the **Channel ID** directly (e.g. -100xxxx).\n\n"
                     f"Error: `{e}`"
                 )
 
