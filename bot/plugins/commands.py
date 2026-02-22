@@ -24,7 +24,7 @@ def parse_channel_input(message: Message):
 async def clone_init(client, message):
     user_id = message.from_user.id
     CLONE_SESSION[user_id] = {"step": "WAIT_TOKEN"}
-    await message.reply_text("🤖 **Clone Bot Wizard**\n\nSend your **Bot Token** from @BotFather.\n_(Send /cancel to stop)_", reply_markup=ForceReply(selective=True, placeholder="12345:ABC..."))
+    await message.reply_text("🤖 **Clone Bot Wizard**\n\nSend your **Bot Token** from @BotFather.", reply_markup=ForceReply(selective=True, placeholder="12345:ABC..."))
 
 @Client.on_message(filters.private & (filters.text | filters.forwarded) & ~filters.command(["start", "clone", "stats", "broadcast"]))
 async def clone_wizard_handler(client, message: Message):
@@ -55,11 +55,13 @@ async def clone_wizard_handler(client, message: Message):
 
             await msg.edit("⚙️ **Verifying Channel...**")
             try:
+                # Try simple access
                 chat_info = await new_client.get_chat(channel_id)
                 final_channel_id = chat_info.id
                 await new_client.send_message(final_channel_id, "✅ **Database Connected!**")
                 await save_and_finish(new_client, user_id, session["token"], final_channel_id, msg)
             except Exception:
+                # If fail, use auto-discovery
                 await msg.edit("⚠️ **I can't see the channel.**\n\n👉 **Send a message in your channel NOW.**\nI am listening...")
                 future = asyncio.get_running_loop().create_future()
                 async def discovery_handler(c, m):
