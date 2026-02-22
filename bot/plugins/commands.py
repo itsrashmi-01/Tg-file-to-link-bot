@@ -11,29 +11,31 @@ users_col = db.users
 CLONE_SESSION = {}
 
 # --- HELPER: Extract Channel ID ---
-def parse_channel_input(text: str):
-    text = text.strip()
+def parse_channel_input(message: Message):
+    text = message.text.strip() if message.text else ""
     
-    # 0. Check for Invite Links (Unsupported)
+    # 1. Check for Forwarded Message (BEST METHOD)
+    if message.forward_from_chat:
+        return message.forward_from_chat.id
+    
+    # 2. Check for Invite Links (Unsupported)
     if "t.me/+" in text or "joinchat" in text:
         return "INVITE_LINK_ERROR"
 
-    # 1. Private Post Link (e.g. https://t.me/c/1234567890/123)
-    # Extracts digits after /c/ -> 1234567890 -> adds -100 prefix
+    # 3. Direct ID (e.g. -100123456789)
+    if re.match(r"^-100\d+$", text):
+        return int(text)
+    
+    # 4. Private Post Link (e.g. t.me/c/123456/1 -> -100123456)
     private_link_match = re.search(r"t\.me\/c\/(\d+)", text)
     if private_link_match:
         return int(f"-100{private_link_match.group(1)}")
 
-    # 2. Direct ID (e.g. -100123456789)
-    # Allows -100 prefix or just 10+ digits (assumes private channel)
-    if re.match(r"^-100\d+$", text):
-        return int(text)
-
-    # 3. Public Username (e.g. @channel or t.me/channel)
+    # 5. Public Username
     username_match = re.search(r"(?:t\.me\/|@)(\w{5,32})", text)
     if username_match:
         name = username_match.group(1)
-        if name != "c": 
+        if name != "c":
             return f"@{name}"
         
     return None
@@ -53,7 +55,7 @@ async def clone_init(client, message):
     )
 
 # --- 2. HANDLE INPUTS ---
-@Client.on_message(filters.private & filters.text & ~filters.command(["start", "clone", "stats", "broadcast"]))
+@Client.on_message(filters.private & (filters.text | filters.forwarded) & ~filters.command(["start", "clone", "stats", "broadcast"]))
 async def clone_wizard_handler(client, message: Message):
     user_id = message.from_user.id
     
@@ -61,7 +63,7 @@ async def clone_wizard_handler(client, message: Message):
         return 
         
     session = CLONE_SESSION[user_id]
-    text = message.text.strip()
+    text = message.text.strip() if message.text else ""
 
     if text.lower() == "/cancel":
         del CLONE_SESSION[user_id]
@@ -77,24 +79,23 @@ async def clone_wizard_handler(client, message: Message):
         
         await message.reply_text(
             "✅ **Token Accepted!**\n\n"
-            "Now I need a **Log Channel** to store files.\n\n"
+            "Now I need a **Log Channel** to store your files.\n\n"
             "1️⃣ Create a **Private Channel**.\n"
-            "2️⃣ **Add your new clone bot** as an **Admin**.\n"
-            "3️⃣ Send a message in that channel.\n"
-            "4️⃣ **Copy the Link** to that message and paste it here.\n"
-            "_(e.g., `https://t.me/c/123456/1`)_",
-            reply_markup=ForceReply(selective=True, placeholder="https://t.me/c/...")
+            "2️⃣ **Add your new clone bot** (not me!) as an **Admin**.\n"
+            "3️⃣ **Forward a Message** from that channel to here.\n"
+            "_(Or verify you are forwarding from the channel, not a user)_",
+            reply_markup=ForceReply(selective=True, placeholder="Forward message here...")
         )
 
     # --- STEP 2: START BOT & VERIFY CHANNEL ---
     elif session["step"] == "WAIT_CHANNEL":
-        channel_input = parse_channel_input(text)
+        channel_input = parse_channel_input(message)
         
         if channel_input == "INVITE_LINK_ERROR":
-            return await message.reply("❌ **Invite Links are NOT supported!**\nPlease send a **Post Link** or **Channel ID**.")
+            return await message.reply("❌ **Invite Links are NOT supported!**\nPlease Forward a Message from the channel.")
 
         if not channel_input:
-            return await message.reply("❌ **Invalid Format.**\nPlease send a valid **Post Link** (e.g., `https://t.me/c/xxx/1`).")
+            return await message.reply("❌ **Invalid Format.**\nPlease **Forward a Message** from your Log Channel.")
         
         msg = await message.reply("⚙️ **Verifying Channel Access...**")
         
@@ -103,12 +104,18 @@ async def clone_wizard_handler(client, message: Message):
             new_client, error_msg = await start_clone(session["token"], user_id, channel_input)
             
             if not new_client:
-                return await msg.edit(f"❌ **Error:** The Bot Token seems invalid.\nError: `{error_msg}`")
+                return await msg.edit(f"❌ **Bot Start Error:**\nThe Token seems invalid.\nError: `{error_msg}`")
 
-            # 2. Verify Channel Access (CRITICAL FIX)
+            # 2. Verify Channel Access
             final_channel_id = None
             try:
                 # Force Resolve Peer: This fetches the access hash for Private Channels
+                # We try export_chat_invite_link first as it forces a peer refresh usually
+                try:
+                    await new_client.export_chat_invite_link(channel_input)
+                except:
+                    pass # Ignore if no perms, just trying to cache the peer
+
                 chat_info = await new_client.get_chat(channel_input)
                 final_channel_id = chat_info.id
                 
@@ -124,8 +131,9 @@ async def clone_wizard_handler(client, message: Message):
                     f"❌ **Channel Access Error:**\n\n"
                     f"Your bot could not access the channel `{channel_input}`.\n\n"
                     "**Troubleshooting:**\n"
-                    "1. Is the bot an **Admin** in the channel?\n"
-                    "2. Did you provide the correct Post Link?\n\n"
+                    "1. **CRITICAL:** Did you add the **CLONE BOT** (the one you just made) as Admin?\n"
+                    "2. Do NOT add *this* bot as admin, add *your* bot.\n"
+                    "3. Try **Forwarding** a message from the channel again.\n\n"
                     f"Error: `{e}`"
                 )
 
