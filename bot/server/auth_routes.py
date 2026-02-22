@@ -19,25 +19,47 @@ clones_col = db.clones
 
 class AuthData(BaseModel):
     initData: str
+    bot_id: str = None # Added bot_id field
 
 class FileAction(BaseModel):
     user_id: int
     file_id: str
     new_name: str = ""
 
-# --- VALIDATION HELPER ---
-def validate_telegram_data(init_data: str) -> dict:
+# --- DYNAMIC TOKEN VALIDATION ---
+async def get_bot_token(bot_id: str):
+    # 1. Check if it's the Main Bot
+    main_bot_id = Config.BOT_TOKEN.split(":")[0]
+    if not bot_id or bot_id == main_bot_id:
+        return Config.BOT_TOKEN
+    
+    # 2. Check Clone Bots
+    # We strip the "-100" or similar just in case, though bot IDs are positive ints
+    try:
+        # Search efficiently using regex or string match since token starts with ID
+        # Finding doc where 'token' starts with 'bot_id:'
+        clone = await clones_col.find_one({"token": {"$regex": f"^{bot_id}:"}})
+        if clone:
+            return clone['token']
+    except:
+        pass
+        
+    return Config.BOT_TOKEN # Fallback
+
+async def validate_telegram_data(init_data: str, bot_token: str) -> dict:
     try:
         parsed_data = dict(item.split("=", 1) for item in unquote(init_data).split("&"))
         hash_value = parsed_data.pop("hash")
         data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed_data.items()))
-        secret_key = hmac.new(b"WebAppData", Config.BOT_TOKEN.encode(), hashlib.sha256).digest()
+        secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
         calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        
         if calculated_hash != hash_value: return None
         return json.loads(parsed_data["user"])
     except: return None
 
-# --- AUTH ROUTES ---
+# --- ROUTES ---
+
 @router.get("/api/auth/generate_token")
 async def generate_token():
     token = str(uuid.uuid4())
@@ -60,22 +82,28 @@ async def check_token(token: str):
 
 @router.post("/api/login")
 async def login(data: AuthData):
-    user = validate_telegram_data(data.initData)
-    if not user: raise HTTPException(status_code=401, detail="Invalid Data")
+    # 1. Find the correct token
+    token_to_use = await get_bot_token(data.bot_id)
+    
+    # 2. Validate
+    user = await validate_telegram_data(data.initData, token_to_use)
+    
+    if not user: 
+        raise HTTPException(status_code=401, detail="Invalid Data or Signature Mismatch")
+    
     user_id = user["id"]
     await users_col.update_one({"user_id": user_id}, {"$set": {"first_name": user.get("first_name")}}, upsert=True)
     return {"success": True, "user": user, "role": "admin" if user_id in Config.ADMIN_IDS else "user"}
 
-# --- DASHBOARD ROUTES ---
 @router.get("/api/dashboard/user")
 async def get_user_dashboard(user_id: int):
-    # 1. Stats
+    # Stats
     pipeline = [{"$match": {"user_id": user_id}}, {"$group": {"_id": None, "totalSize": {"$sum": "$file_size"}, "count": {"$sum": 1}}}]
     stats = await files_col.aggregate(pipeline).to_list(1)
     total_size = stats[0]['totalSize'] if stats else 0
     total_count = stats[0]['count'] if stats else 0
 
-    # 2. Files
+    # Files
     cursor = files_col.find({"user_id": user_id}).sort("_id", -1).limit(50)
     files = []
     async for doc in cursor:
@@ -86,13 +114,9 @@ async def get_user_dashboard(user_id: int):
             "link": f"{Config.BASE_URL}/dl/{doc.get('log_msg_id')}"
         })
         
-    # 3. Clone Bot Info
+    # Clone Info
     clone_info = await clones_col.find_one({"user_id": user_id})
-    clone_data = None
-    if clone_info:
-        clone_data = {
-            "username": clone_info.get("username"),
-        }
+    clone_data = {"username": clone_info.get("username")} if clone_info else None
         
     return {
         "files": files, 
@@ -117,7 +141,6 @@ async def search_files(user_id: int, query: str):
         })
     return {"files": files}
 
-# --- FILE ACTIONS ---
 @router.post("/api/file/rename")
 async def rename_file(data: FileAction):
     result = await files_col.update_one(
@@ -136,14 +159,12 @@ async def delete_file(data: FileAction):
         return {"success": True}
     return {"success": False}
 
-# --- CLONE ACTIONS (New) ---
 @router.post("/api/clone/delete")
 async def delete_clone(data: dict):
     user_id = data.get("user_id")
     await clones_col.delete_one({"user_id": user_id})
     return {"success": True}
 
-# --- SETTINGS ---
 @router.get("/api/settings/get")
 async def get_settings(user_id: int):
     user = await users_col.find_one({"user_id": user_id})
