@@ -29,6 +29,7 @@ def get_file_buttons(msg_id, link, is_protected=False):
 
 @Client.on_message((filters.document | filters.video | filters.audio | filters.photo) & filters.private)
 async def file_handler(client, message):
+    # Ignore wizard sessions
     try:
         from bot.plugins.commands import CLONE_SESSION
         if message.from_user.id in CLONE_SESSION: return 
