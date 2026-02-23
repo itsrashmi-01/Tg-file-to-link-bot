@@ -1,34 +1,39 @@
-from pyrogram.types import Message
-
-def get_file_id(file):
-    return file.file_id
-
-def get_file_name(file):
-    if hasattr(file, "file_name"):
-        return file.file_name
-    return "file"
-
-def get_file_size(file):
-    if hasattr(file, "file_size"):
-        return str(file.file_size)
-    return "0"
+import aiohttp
+from pyrogram.errors import UserNotParticipant
+from config import Config
 
 class TgFileStreamer:
-    def __init__(self, client, file, from_bytes, until_bytes):
+    def __init__(self, client, file_id, start_offset=0):
         self.client = client
-        self.file = file
-        self.from_bytes = from_bytes
-        self.until_bytes = until_bytes
+        self.file_id = file_id
+        self.offset = start_offset
 
-    async def yield_chunks(self):
-        # Calculate offset and length
-        offset = self.from_bytes
-        length = self.until_bytes - self.from_bytes + 1
-        
-        # Pyrogram's stream_media automatically handles chunks
+    async def __aiter__(self):
         async for chunk in self.client.stream_media(
-            self.file,
-            offset=offset,
-            limit=length
+            self.file_id,
+            limit=0,
+            offset=self.offset
         ):
             yield chunk
+
+async def is_subscribed(client, user_id):
+    if not Config.FORCE_SUB_CHANNEL:
+        return True
+    try:
+        await client.get_chat_member(Config.FORCE_SUB_CHANNEL, user_id)
+        return True
+    except UserNotParticipant:
+        return False
+    except Exception as e:
+        print(f"FSub Error: {e}")
+        return True
+
+# --- TINYURL HELPER ---
+async def get_tinyurl(long_url):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://tinyurl.com/api-create.php?url={long_url}") as response:
+                return await response.text()
+    except Exception as e:
+        print(f"TinyURL Error: {e}")
+        return long_url
