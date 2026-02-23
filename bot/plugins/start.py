@@ -23,19 +23,18 @@ def get_start_menu(first_name):
         "⚙️ **New:** Go to **Settings** to turn on/off TinyURL shortener."
     )
 
-def get_start_menu(first_name):
-    web_app_url = Config.BLOGGER_URL if Config.BLOGGER_URL else Config.BASE_URL
-    
-    # We use a standard WebApp button. 
-    # The Telegram WebApp JS will handle passing the initData automatically.
     buttons = InlineKeyboardMarkup([
+        # Main Dashboard Button
         [InlineKeyboardButton("🚀 My Dashboard", web_app=WebAppInfo(url=web_app_url))],
+        
+        # 'My Files' now opens the Web App directly to the files tab
         [
-            InlineKeyboardButton("📂 My Files", web_app=WebAppInfo(url=f"{web_app_url}?tab=files")), 
+            InlineKeyboardButton("📂 My Files", web_app=WebAppInfo(url=files_url)), 
             InlineKeyboardButton("⚙️ Settings", callback_data="settings")
         ],
-        [InlineKeyboardButton("🤖 Manage My Clone", callback_data="clone_info")],
-        [InlineKeyboardButton("❓ Help", callback_data="help")]
+        
+        [InlineKeyboardButton("🤖 Create Your Own Bot", callback_data="clone_info")],
+        [InlineKeyboardButton("❓ Help", callback_data="help"), InlineKeyboardButton("ℹ️ About", callback_data="about")]
     ])
     return text, buttons
 
