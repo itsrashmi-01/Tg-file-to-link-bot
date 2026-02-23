@@ -15,7 +15,7 @@ from bot.server.stream_routes import router as stream_router
 from bot.clone import load_all_clones, db
 
 # Import plugins to ensure they load
-from bot.plugins import start, commands, files
+from bot.plugins import start, commands, files, clone_chat, connect, protect
 
 app = FastAPI()
 files_col = db.files # Access DB for cleaner task
@@ -87,3 +87,4 @@ if __name__ == "__main__":
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
+
