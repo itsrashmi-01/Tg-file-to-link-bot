@@ -1,5 +1,4 @@
 import asyncio
-import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply, WebAppInfo
 from config import Config
@@ -37,37 +36,39 @@ def get_file_buttons(msg_id, link, is_protected=False):
 
 @Client.on_message((filters.document | filters.video | filters.audio | filters.photo) & filters.private)
 async def file_handler(client, message):
-    # 1. Check Force Subscribe (Skip for Clones if you want, but keeping it standard)
-    if not await is_subscribed(client, message.from_user.id):
-        return await message.reply_text(
-            "⚠️ **You must join our channel to use this bot!**",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Join Channel", url=Config.FORCE_SUB_URL)],
-                [InlineKeyboardButton("Try Again", url=f"https://t.me/{client.me.username}?start=start")]
-            ])
+    # 1. Check Force Subscribe
+    try:
+        if not await is_subscribed(client, message.from_user.id):
+            return await message.reply_text(
+                "⚠️ **You must join our channel to use this bot!**",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Join Channel", url=Config.FORCE_SUB_URL)],
+                    [InlineKeyboardButton("Try Again", url=f"https://t.me/{client.me.username}?start=start")]
+                ])
+            )
+    except Exception:
+        pass # Ignore fsub errors if config is wrong
+
+    # 2. GET LOG CHANNEL (Unified Logic)
+    # This now works for BOTH Main Bot (via bot_client.py) and Clones (via clone.py)
+    log_channel = getattr(client, "log_channel", None)
+
+    # 3. Connection Check
+    if not log_channel:
+        # Check if it's the Main Bot (owner_id is None)
+        if getattr(client, "owner_id", None) is None:
+            return await message.reply("❌ **System Error:** `LOG_CHANNEL_ID` is missing in Config/Env.")
+        
+        # It's a Clone Bot
+        return await message.reply(
+            "❌ **Database Not Connected.**\n\n"
+            "1. Create a Private Channel.\n"
+            "2. Add me as Admin.\n"
+            "3. Send `/connect` inside that channel.",
+            quote=True
         )
 
-    # 2. DETERMINE LOG CHANNEL (CRITICAL FIX)
-    log_channel = None
-    
-    # Check if this is a Clone Bot (Clones have 'owner_id' attribute)
-    if hasattr(client, 'owner_id'):
-        log_channel = getattr(client, 'log_channel', None)
-        if not log_channel:
-            return await message.reply(
-                "❌ **Database Not Connected.**\n\n"
-                "1. Create a Private Channel.\n"
-                "2. Add me as Admin.\n"
-                "3. Send `/connect` inside that channel.",
-                quote=True
-            )
-    else:
-        # This is the Main Bot
-        log_channel = Config.LOG_CHANNEL_ID
-        if not log_channel:
-             return await message.reply("❌ **System Error:** Main Log Channel not configured.")
-
-    # 3. Handle Media Groups (Batch)
+    # 4. Handle Media Groups (Batch)
     if message.media_group_id:
         mg_id = message.media_group_id
         if mg_id not in BATCH_DATA:
@@ -76,7 +77,7 @@ async def file_handler(client, message):
         BATCH_DATA[mg_id].append(message)
         return
 
-    # 4. Process Single File
+    # 5. Process Single File
     await process_file(client, message, log_channel)
 
 async def process_batch(client, mg_id, chat_id, user_id, log_channel):
@@ -152,7 +153,10 @@ async def save_file_to_db(user_msg, log_msg, media, channel_id):
         "expiry": None
     })
 
-# --- CALLBACK HANDLERS ---
+# --- CALLBACK HANDLERS (Rename, Protect, Validity, Back) ---
+# ... (Keep the rest of your callback handlers exactly as they were) ...
+# (They are standard and don't affect the main logic issue)
+
 @Client.on_callback_query(filters.regex(r"^rename_"))
 async def rename_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
