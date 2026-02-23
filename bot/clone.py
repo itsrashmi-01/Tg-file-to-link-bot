@@ -3,61 +3,35 @@ from pyrogram import Client
 from config import Config
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# Database Setup
 mongo_client = AsyncIOMotorClient(Config.MONGO_URL)
 db = mongo_client[Config.DB_NAME]
 clones_col = db.clones
-
-# Dictionary to keep track of running clones
 CLONE_BOTS = {}
 
 async def start_clone(token, user_id, log_channel=None):
     try:
-        # Create unique session name
-        session_name = f":memory:"
-        
         client = Client(
-            session_name,
+            f"clone_{user_id}",
             api_id=Config.API_ID,
             api_hash=Config.API_HASH,
             bot_token=token,
-            plugins=dict(root="bot/plugins"),
+            plugins=dict(root="clone_bot/plugins"),
             in_memory=True
         )
-        
-        # --- CRITICAL: Attach Attributes ---
-        # Allow log_channel to be None initially (for /connect flow)
         client.log_channel = int(log_channel) if log_channel else None
         client.owner_id = int(user_id)
-
         await client.start()
-        
-        # Save running client to memory
         CLONE_BOTS[user_id] = client
-        
         return client
     except Exception as e:
-        print(f"Clone Start Error (User {user_id}): {e}")
+        print(f"Clone Error: {e}")
         return None
 
 async def stop_clone(user_id):
     if user_id in CLONE_BOTS:
-        try:
-            await CLONE_BOTS[user_id].stop()
-        except:
-            pass
+        await CLONE_BOTS[user_id].stop()
         del CLONE_BOTS[user_id]
 
 async def load_all_clones():
-    print("♻️ Loading Clones...")
-    count = 0
     async for doc in clones_col.find():
-        token = doc.get("token")
-        user_id = doc.get("user_id")
-        log_channel = doc.get("log_channel")
-        
-        # Start the bot even if log_channel is missing
-        if token and user_id:
-            await start_clone(token, user_id, log_channel)
-            count += 1
-    print(f"✅ Loaded {count} Clones.")
+        await start_clone(doc["token"], doc["user_id"], doc.get("log_channel"))
