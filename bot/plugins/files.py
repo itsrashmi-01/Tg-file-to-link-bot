@@ -1,7 +1,7 @@
 import asyncio
 import time
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply, WebAppInfo
 from config import Config
 from bot.utils import is_subscribed, get_tinyurl
 from bot.clone import db
@@ -23,8 +23,8 @@ def get_file_buttons(msg_id, link, is_protected=False):
     protect_text = "📝 Edit Password" if is_protected else "🔒 Protect"
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🚀 Open Link", url=link),
-            InlineKeyboardButton("📤 Share", url=f"https://t.me/share/url?url={link}&text=Here+is+your+file!")
+            InlineKeyboardButton("📺 Watch / Stream", web_app=WebAppInfo(url=link)),
+            InlineKeyboardButton("🚀 Fast Download", url=link)
         ],
         [
             InlineKeyboardButton("✏️ Rename", callback_data=f"rename_{msg_id}"),
@@ -35,8 +35,9 @@ def get_file_buttons(msg_id, link, is_protected=False):
         ]
     ])
 
-@Client.on_message((filters.document | filters.video | filters.audio) & filters.private)
+@Client.on_message((filters.document | filters.video | filters.audio | filters.photo) & filters.private)
 async def file_handler(client, message):
+    # 1. Check Force Subscribe (Skip for Clones if you want, but keeping it standard)
     if not await is_subscribed(client, message.from_user.id):
         return await message.reply_text(
             "⚠️ **You must join our channel to use this bot!**",
@@ -46,50 +47,76 @@ async def file_handler(client, message):
             ])
         )
 
+    # 2. DETERMINE LOG CHANNEL (CRITICAL FIX)
+    log_channel = None
+    
+    # Check if this is a Clone Bot (Clones have 'owner_id' attribute)
+    if hasattr(client, 'owner_id'):
+        log_channel = getattr(client, 'log_channel', None)
+        if not log_channel:
+            return await message.reply(
+                "❌ **Database Not Connected.**\n\n"
+                "1. Create a Private Channel.\n"
+                "2. Add me as Admin.\n"
+                "3. Send `/connect` inside that channel.",
+                quote=True
+            )
+    else:
+        # This is the Main Bot
+        log_channel = Config.LOG_CHANNEL_ID
+        if not log_channel:
+             return await message.reply("❌ **System Error:** Main Log Channel not configured.")
+
+    # 3. Handle Media Groups (Batch)
     if message.media_group_id:
         mg_id = message.media_group_id
         if mg_id not in BATCH_DATA:
             BATCH_DATA[mg_id] = []
-            asyncio.create_task(process_batch(client, mg_id, message.chat.id, message.from_user.id))
+            asyncio.create_task(process_batch(client, mg_id, message.chat.id, message.from_user.id, log_channel))
         BATCH_DATA[mg_id].append(message)
         return
 
-    await process_file(client, message)
+    # 4. Process Single File
+    await process_file(client, message, log_channel)
 
-async def process_batch(client, mg_id, chat_id, user_id):
+async def process_batch(client, mg_id, chat_id, user_id, log_channel):
     await asyncio.sleep(4)
     messages = BATCH_DATA.pop(mg_id, [])
     
-    # Check User Settings
     user = await users_col.find_one({"user_id": user_id})
-    use_short = user.get("use_short", False)
+    use_short = user.get("use_short", False) if user else False
 
     links_text = "**📦 Batch Links:**\n\n"
     for msg in messages:
-        log_msg = await msg.copy(chat_id=Config.LOG_CHANNEL_ID)
-        media = msg.document or msg.video or msg.audio
-        await save_file_to_db(msg, log_msg, media)
+        try:
+            log_msg = await msg.copy(chat_id=log_channel)
+        except Exception as e:
+            await client.send_message(chat_id, f"❌ Error saving file: {e}")
+            continue
+
+        media = msg.document or msg.video or msg.audio or msg.photo
+        await save_file_to_db(msg, log_msg, media, log_channel)
         
         base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
-        
         final_link = await get_tinyurl(base_link) if use_short else base_link
         
-        links_text += f"• [{getattr(media, 'file_name', 'File')}]({final_link})\n"
+        file_name = getattr(media, "file_name", "file")
+        links_text += f"• [{file_name}]({final_link})\n"
     
     await client.send_message(chat_id, links_text, disable_web_page_preview=True)
 
-async def process_file(client, message):
+async def process_file(client, message, log_channel):
     try:
-        log_msg = await message.copy(chat_id=Config.LOG_CHANNEL_ID)
-        media = message.document or message.video or message.audio
+        # Copy to the determined Log Channel
+        log_msg = await message.copy(chat_id=log_channel)
+        media = message.document or message.video or message.audio or message.photo
         
-        await save_file_to_db(message, log_msg, media)
+        await save_file_to_db(message, log_msg, media, log_channel)
 
         base_link = f"{Config.BLOGGER_URL}?id={log_msg.id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{log_msg.id}"
         
-        # Check User Settings
         user = await users_col.find_one({"user_id": message.from_user.id})
-        use_short = user.get("use_short", False) # Default OFF
+        use_short = user.get("use_short", False) if user else False
 
         final_link = await get_tinyurl(base_link) if use_short else base_link
         
@@ -110,22 +137,22 @@ async def process_file(client, message):
         )
 
     except Exception as e:
-        await message.reply_text(f"❌ Error: {e}")
+        await message.reply_text(f"❌ **Error:** {e}\n\nMake sure I am an **Admin** in your Log Channel.")
 
-async def save_file_to_db(user_msg, log_msg, media):
+async def save_file_to_db(user_msg, log_msg, media, channel_id):
     await files_col.insert_one({
         "user_id": user_msg.from_user.id,
         "log_msg_id": log_msg.id,
+        "channel_id": channel_id, # Stores which channel the file is in
         "file_name": getattr(media, "file_name", "file"),
         "file_size": getattr(media, "file_size", 0),
-        "file_unique_id": media.file_unique_id,
+        "file_unique_id": getattr(media, "file_unique_id", ""),
         "timestamp": user_msg.date,
         "password": None,
         "expiry": None
     })
 
 # --- CALLBACK HANDLERS ---
-
 @Client.on_callback_query(filters.regex(r"^rename_"))
 async def rename_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
@@ -148,29 +175,21 @@ async def protect_callback(client, callback_query):
 @Client.on_callback_query(filters.regex(r"^validity_"))
 async def validity_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
-    
-    # Updated Buttons with BACK function
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("30 Mins", callback_data=f"settime_{file_id}_30m"), InlineKeyboardButton("1 Hour", callback_data=f"settime_{file_id}_1h")],
         [InlineKeyboardButton("1 Day", callback_data=f"settime_{file_id}_1d"), InlineKeyboardButton("1 Week", callback_data=f"settime_{file_id}_7d")],
         [InlineKeyboardButton("🔙 Back", callback_data=f"back_{file_id}")]
     ])
-    
-    await callback_query.message.edit_text(
-        "⏳ **Select Link Validity:**\nLink will stop working after this time.",
-        reply_markup=buttons
-    )
+    await callback_query.message.edit_text("⏳ **Select Link Validity:**", reply_markup=buttons)
 
 @Client.on_callback_query(filters.regex(r"^back_"))
 async def back_to_main_callback(client, callback_query):
     file_id = int(callback_query.data.split("_")[1])
-    # Edit the message back to file info
     await send_updated_message(client, callback_query.message.chat.id, file_id, message_to_edit=callback_query.message)
 
 @Client.on_callback_query(filters.regex(r"^settime_"))
 async def set_validity_handler(client, callback_query):
     _, file_id, duration = callback_query.data.split("_")
-    
     seconds = 0
     if duration == "30m": seconds = 1800
     elif duration == "1h": seconds = 3600
@@ -178,17 +197,13 @@ async def set_validity_handler(client, callback_query):
     elif duration == "7d": seconds = 604800
     
     expiry_time = time.time() + seconds
-    
     await files_col.update_one({"log_msg_id": int(file_id)}, {"$set": {"expiry": expiry_time}})
-    
     await callback_query.answer("✅ Validity Set!", show_alert=True)
     await send_updated_message(client, callback_query.message.chat.id, int(file_id), message_to_edit=callback_query.message)
 
 @Client.on_callback_query(filters.regex("close"))
 async def close_cb(client, callback_query):
     await callback_query.message.delete()
-
-# --- REPLY HANDLER ---
 
 @Client.on_message(filters.private & filters.reply)
 async def input_handler(client, message):
@@ -207,13 +222,10 @@ async def input_handler(client, message):
         return await message.reply("❌ File not found in DB.")
 
     if action == "rename":
-        new_name = message.text
-        await files_col.update_one({"_id": file_data["_id"]}, {"$set": {"file_name": new_name}})
-        await message.reply(f"✅ **Renamed to:** `{new_name}`")
-    
+        await files_col.update_one({"_id": file_data["_id"]}, {"$set": {"file_name": message.text}})
+        await message.reply(f"✅ **Renamed to:** `{message.text}`")
     elif action == "protect":
-        password = message.text
-        await files_col.update_one({"_id": file_data["_id"]}, {"$set": {"password": password}})
+        await files_col.update_one({"_id": file_data["_id"]}, {"$set": {"password": message.text}})
     
     try:
         await message.delete()
@@ -228,11 +240,9 @@ async def send_updated_message(client, chat_id, file_id, message_to_edit=None):
 
     base_link = f"{Config.BLOGGER_URL}?id={file_id}" if Config.BLOGGER_URL else f"{Config.BASE_URL}/dl/{file_id}"
     
-    # Check User Settings for TinyURL
-    owner_id = file_data.get("user_id")
-    user = await users_col.find_one({"user_id": owner_id})
+    user_id = file_data.get("user_id")
+    user = await users_col.find_one({"user_id": user_id})
     use_short = user.get("use_short", False) if user else False
-
     final_link = await get_tinyurl(base_link) if use_short else base_link
     
     is_protected = bool(file_data.get("password"))
@@ -241,10 +251,7 @@ async def send_updated_message(client, chat_id, file_id, message_to_edit=None):
     validity_text = ""
     if file_data.get("expiry"):
         remaining = int(file_data['expiry'] - time.time())
-        if remaining > 0:
-            validity_text = f"\n\n⏳ **Expires in:** {remaining//60} mins"
-        else:
-            validity_text = "\n\n🚫 **Link Expired**"
+        validity_text = f"\n\n⏳ **Expires in:** {remaining//60} mins" if remaining > 0 else "\n\n🚫 **Link Expired**"
 
     caption = (
         f"✅ **File Settings Updated!**\n\n"
