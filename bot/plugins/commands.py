@@ -6,116 +6,117 @@ from config import Config
 
 users_col = db.users
 
-# --- CLONE INTERACTIVE FLOW ---
+# --- CLONE SETUP FLOW ---
 
 @Client.on_callback_query(filters.regex("clone_info"))
 async def clone_instructions(client, callback_query):
-    """Step 1: Provide Setup Instructions"""
+    """Step 1: Instructions"""
     text = (
-        "🤖 **Clone Machine: Setup Guide**\n\n"
-        "Follow these steps to create your personal bot:\n\n"
-        "1️⃣ Create a bot at @BotFather and copy the **API Token**.\n"
-        "2️⃣ Create a **Private Channel** to store your files.\n"
-        "3️⃣ Add your new bot as an **Admin** in that channel with 'Post Messages' rights.\n\n"
-        "Ready to begin the connection?"
+        "🤖 **Clone Bot Setup Guide**\n\n"
+        "Follow these simple steps to create your own bot:\n\n"
+        "1️⃣ **Get Token:** Create a bot at @BotFather and copy the API Token.\n"
+        "2️⃣ **Prepare Channel:** Create a Private Channel (your database).\n"
+        "3️⃣ **Finalize:** You will add your bot as admin and send a command there.\n\n"
+        "Ready to start?"
     )
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ I'm Ready, Start Setup", callback_data="get_token")],
+        [InlineKeyboardButton("✅ Start Setup", callback_data="get_token")],
         [InlineKeyboardButton("🔙 Back", callback_data="start_menu")]
     ])
     await callback_query.message.edit_text(text, reply_markup=buttons)
 
 @Client.on_callback_query(filters.regex("get_token"))
 async def ask_for_token(client, callback_query):
-    """Step 2: Request the API Token"""
+    """Step 2: Ask for Token"""
     await users_col.update_one(
         {"user_id": callback_query.from_user.id}, 
         {"$set": {"state": "WAITING_FOR_TOKEN"}}
     )
     await callback_query.message.reply_text(
-        "📝 **Step 1:** Paste your **Bot Token** from @BotFather below.",
+        "📝 **Step 1:** Paste your **Bot Token** from @BotFather below.\n\n"
+        "*(Ensure you are replying to this message)*",
         reply_markup=ForceReply(placeholder="123456789:ABCDEF...")
     )
     await callback_query.message.delete()
 
 @Client.on_message(filters.private & filters.text & ~filters.command(["start", "clone", "delete_clone"]))
 async def clone_input_handler(client, message):
-    """Handles the multi-step input for Token and Channel ID"""
+    """Handles the transition from Token to Channel link"""
     user = await users_col.find_one({"user_id": message.from_user.id})
     state = user.get("state") if user else None
 
-    # STEP 3: Verify Token and Ask for Channel ID
     if state == "WAITING_FOR_TOKEN":
         token = message.text.strip()
-        status = await message.reply("🔍 **Verifying Bot Token...**")
+        status = await message.reply("🔍 **Verifying Token...**")
         
         try:
-            # Temporary client to check if token is valid
-            temp_client = Client(":memory:", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=token, in_memory=True)
-            await temp_client.start()
-            bot_me = await temp_client.get_me()
-            await temp_client.stop()
-            
-            await users_col.update_one(
-                {"user_id": message.from_user.id}, 
-                {"$set": {"state": "WAITING_FOR_CHANNEL", "temp_token": token}}
-            )
-            
-            text = (
-                f"✅ **Token Verified!** Bot: @{bot_me.username}\n\n"
-                "🛰 **Step 2:** Provide your **Channel ID**.\n\n"
-                f"1. Ensure @{bot_me.username} is an **Admin** in your channel.\n"
-                "2. Send the ID here (e.g., `-100123456789`)."
-            )
-            await status.edit(text, reply_markup=ForceReply(placeholder="-100..."))
-            
-        except Exception as e:
-            await status.edit(f"❌ **Invalid Token!**\n\nEnsure you copied the full token correctly.\n\n`Error: {e}`")
-
-    # STEP 4: Warmup Cache, Verify Permissions, and Save
-    elif state == "WAITING_FOR_CHANNEL":
-        try:
-            channel_id = int(message.text.strip())
-            token = user.get("temp_token")
-            status = await message.reply("⚙️ **Attempting to connect...**")
-            
-            # Start the clone instance
-            new_clone = await start_clone(token, message.from_user.id, channel_id)
+            # Start clone immediately with dummy channel ID to listen for /connect
+            new_clone = await start_clone(token, message.from_user.id, 0)
             
             if new_clone:
-                try:
-                    # CACHE WARMUP: Force the bot to resolve the chat identity
-                    await new_clone.get_chat(channel_id)
-                    await asyncio.sleep(1) # Small buffer for Telegram sync
-                    
-                    # Test permission
-                    await new_clone.send_message(
-                        channel_id, 
-                        "✅ **Database Connected!**\n\nThis bot is now ready to store and stream files."
-                    )
-                except Exception as e:
-                    await stop_clone(message.from_user.id)
-                    return await status.edit(
-                        f"❌ **Permission Error!**\n\nBot must be an Admin in `{channel_id}`.\n\n"
-                        f"**Note:** If the bot is already an admin, remove it and re-add it to refresh the cache.\n\n"
-                        f"`Debug: {e}`"
-                    )
-
-                # Save and Reset State
-                await clones_col.update_one(
-                    {"user_id": message.from_user.id},
-                    {"$set": {"token": token, "log_channel": channel_id, "username": new_clone.me.username}},
-                    upsert=True
+                await users_col.update_one(
+                    {"user_id": message.from_user.id}, 
+                    {"$set": {"state": "WAITING_FOR_CHANNEL", "temp_token": token}}
                 )
-                await users_col.update_one({"user_id": message.from_user.id}, {"$set": {"state": "IDLE"}})
                 
-                await status.edit(f"🎊 **Setup Complete!**\n\nYour personal bot @{new_clone.me.username} is now fully operational.")
+                text = (
+                    f"✅ **Bot @{new_clone.me.username} is Online!**\n\n"
+                    "🛰 **Step 2: Connect your Database**\n\n"
+                    f"1. Add @{new_clone.me.username} to your Private Channel as **Admin**.\n"
+                    "2. **Inside that Channel**, send the command: `/connect`\n\n"
+                    "✨ *I will automatically detect the channel and finish setup!*"
+                )
+                await status.edit(text)
             else:
-                await status.edit("❌ **Error:** Initialization failed.")
-        except ValueError:
-            await message.reply("❌ **Invalid ID!** Please send a numeric ID starting with -100.")
+                await status.edit("❌ **Invalid Token!** Please check @BotFather and try again.")
+        except Exception as e:
+            await status.edit(f"❌ **Connection Error:** `{e}`")
 
-# --- UTILITY & ADMIN COMMANDS ---
+# --- THE HANDSHAKE: HANDLES /CONNECT IN CHANNELS ---
+
+@Client.on_message(filters.command("connect") & (filters.group | filters.channel))
+async def channel_connect_handler(client, message):
+    """
+    This runs on the CLONE bot instance when /connect is sent in the log channel.
+    """
+    owner_id = getattr(client, "owner_id", None)
+    if not owner_id: return
+
+    user = await users_col.find_one({"user_id": owner_id})
+    if not user or user.get("state") != "WAITING_FOR_CHANNEL":
+        return
+
+    channel_id = message.chat.id
+    token = user.get("temp_token")
+
+    # 1. Verification post in channel
+    await message.reply(f"✅ **Database Linked!**\nID: `{channel_id}`\nOwner ID: `{owner_id}`")
+
+    # 2. Save everything to DB
+    await clones_col.update_one(
+        {"user_id": owner_id},
+        {"$set": {
+            "token": token, 
+            "log_channel": channel_id, 
+            "username": client.me.username,
+            "active": True
+        }},
+        upsert=True
+    )
+
+    # 3. Finalize User State
+    await users_col.update_one({"user_id": owner_id}, {"$set": {"state": "IDLE"}})
+
+    # 4. Notify user in Private
+    try:
+        await client.send_message(
+            owner_id, 
+            f"🎊 **Setup Complete!**\n\nYour bot @{client.me.username} is now fully connected to your channel.\n\n"
+            "You can now send files to your bot to generate direct links!"
+        )
+    except: pass
+
+# --- UTILITY COMMANDS ---
 
 @Client.on_message(filters.command("delete_clone") & filters.private)
 async def delete_clone_handler(client, message):
@@ -124,29 +125,16 @@ async def delete_clone_handler(client, message):
     if not clone:
         return await message.reply("❌ You don't have an active clone bot.")
 
-    msg = await message.reply("🗑️ **Shutting down...**")
+    msg = await message.reply("🗑️ **Deleting your bot instance...**")
     try:
         await stop_clone(user_id)
         await clones_col.delete_one({"user_id": user_id})
-        await msg.edit("✅ **Clone Deleted Successfully.**")
+        await msg.edit("✅ **Clone deleted successfully.**")
     except Exception as e:
         await msg.edit(f"❌ Error: {e}")
 
 @Client.on_message(filters.command("stats") & filters.user(Config.ADMIN_IDS))
 async def stats_handler(client, message):
-    users = await users_col.count_documents({})
-    clones = await clones_col.count_documents({})
-    await message.reply_text(f"**📊 Statistics**\n\n👤 Users: `{users}`\n🤖 Clones: `{clones}`")
-
-@Client.on_message(filters.command("broadcast") & filters.user(Config.ADMIN_IDS) & filters.reply)
-async def broadcast_handler(client, message):
-    msg = await message.reply("📡 **Broadcasting...**")
-    count = 0
-    async for user in users_col.find():
-        try:
-            await message.reply_to_message.copy(chat_id=user['user_id'])
-            count += 1
-            await asyncio.sleep(0.05)
-        except:
-            pass
-    await msg.edit(f"✅ Broadcast complete to `{count}` users.")
+    u = await users_col.count_documents({})
+    c = await clones_col.count_documents({})
+    await message.reply_text(f"**📊 Stats**\n\nUsers: `{u}`\nClones: `{c}`")
