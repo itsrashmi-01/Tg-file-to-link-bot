@@ -12,12 +12,12 @@ users_col = db.users
 async def clone_instructions(client, callback_query):
     """Step 1: Provide Setup Instructions"""
     text = (
-        "🤖 **Create Your Own Bot**\n\n"
-        "Follow these steps to set up your personal instance:\n\n"
+        "🤖 **Clone Machine: Setup Guide**\n\n"
+        "Follow these steps to create your personal bot:\n\n"
         "1️⃣ Create a bot at @BotFather and copy the **API Token**.\n"
-        "2️⃣ Create a **Private Channel** to serve as your database.\n"
-        "3️⃣ You will need to add your new bot as an **Admin** in that channel.\n\n"
-        "Ready to begin?"
+        "2️⃣ Create a **Private Channel** to store your files.\n"
+        "3️⃣ Add your new bot as an **Admin** in that channel with 'Post Messages' rights.\n\n"
+        "Ready to begin the connection?"
     )
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ I'm Ready, Start Setup", callback_data="get_token")],
@@ -33,7 +33,7 @@ async def ask_for_token(client, callback_query):
         {"$set": {"state": "WAITING_FOR_TOKEN"}}
     )
     await callback_query.message.reply_text(
-        "📝 **Step 1:** Send me your **Bot Token** from @BotFather.",
+        "📝 **Step 1:** Paste your **Bot Token** from @BotFather below.",
         reply_markup=ForceReply(placeholder="123456789:ABCDEF...")
     )
     await callback_query.message.delete()
@@ -49,14 +49,13 @@ async def clone_input_handler(client, message):
         token = message.text.strip()
         status = await message.reply("🔍 **Verifying Bot Token...**")
         
-        # Test the client temporarily to verify token validity
         try:
+            # Temporary client to check if token is valid
             temp_client = Client(":memory:", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=token, in_memory=True)
             await temp_client.start()
             bot_me = await temp_client.get_me()
             await temp_client.stop()
             
-            # Token valid: Save token and move to next state
             await users_col.update_one(
                 {"user_id": message.from_user.id}, 
                 {"$set": {"state": "WAITING_FOR_CHANNEL", "temp_token": token}}
@@ -64,34 +63,45 @@ async def clone_input_handler(client, message):
             
             text = (
                 f"✅ **Token Verified!** Bot: @{bot_me.username}\n\n"
-                "🛰 **Step 2:** Provide your **Database Channel ID**.\n\n"
-                f"1. Add @{bot_me.username} to your Private Channel as **Admin**.\n"
-                "2. Send the Channel ID here (e.g., `-100123456789`)."
+                "🛰 **Step 2:** Provide your **Channel ID**.\n\n"
+                f"1. Ensure @{bot_me.username} is an **Admin** in your channel.\n"
+                "2. Send the ID here (e.g., `-100123456789`)."
             )
             await status.edit(text, reply_markup=ForceReply(placeholder="-100..."))
             
         except Exception as e:
-            await status.edit(f"❌ **Invalid Token!**\n\nPlease ensure you copied the full token from @BotFather and try again.\n\n`Error: {e}`")
+            await status.edit(f"❌ **Invalid Token!**\n\nEnsure you copied the full token correctly.\n\n`Error: {e}`")
 
-    # STEP 4: Verify Channel Access and Complete Setup
+    # STEP 4: Warmup Cache, Verify Permissions, and Save
     elif state == "WAITING_FOR_CHANNEL":
         try:
             channel_id = int(message.text.strip())
             token = user.get("temp_token")
-            status = await message.reply("⚙️ **Finalizing Setup...**")
+            status = await message.reply("⚙️ **Attempting to connect...**")
             
-            # Attempt to start the actual clone instance
+            # Start the clone instance
             new_clone = await start_clone(token, message.from_user.id, channel_id)
             
             if new_clone:
                 try:
-                    # Test admin permissions in the user's channel
-                    await new_clone.send_message(channel_id, "✅ **Database Connected!**\n\nYour personal bot is now ready to store files.")
-                except Exception:
+                    # CACHE WARMUP: Force the bot to resolve the chat identity
+                    await new_clone.get_chat(channel_id)
+                    await asyncio.sleep(1) # Small buffer for Telegram sync
+                    
+                    # Test permission
+                    await new_clone.send_message(
+                        channel_id, 
+                        "✅ **Database Connected!**\n\nThis bot is now ready to store and stream files."
+                    )
+                except Exception as e:
                     await stop_clone(message.from_user.id)
-                    return await status.edit(f"❌ **Permission Error!**\n\nYour bot must be an **Admin** in channel `{channel_id}` to work. Grant permissions and try again.")
+                    return await status.edit(
+                        f"❌ **Permission Error!**\n\nBot must be an Admin in `{channel_id}`.\n\n"
+                        f"**Note:** If the bot is already an admin, remove it and re-add it to refresh the cache.\n\n"
+                        f"`Debug: {e}`"
+                    )
 
-                # Success: Reset state and save clone to DB
+                # Save and Reset State
                 await clones_col.update_one(
                     {"user_id": message.from_user.id},
                     {"$set": {"token": token, "log_channel": channel_id, "username": new_clone.me.username}},
@@ -99,13 +109,13 @@ async def clone_input_handler(client, message):
                 )
                 await users_col.update_one({"user_id": message.from_user.id}, {"$set": {"state": "IDLE"}})
                 
-                await status.edit(f"🎊 **Congratulations!**\n\nYour bot @{new_clone.me.username} is now active.")
+                await status.edit(f"🎊 **Setup Complete!**\n\nYour personal bot @{new_clone.me.username} is now fully operational.")
             else:
-                await status.edit("❌ **Error:** Failed to initialize the bot. Please restart the process.")
+                await status.edit("❌ **Error:** Initialization failed.")
         except ValueError:
-            await message.reply("❌ **Invalid ID!** Please send a numeric Channel ID (starts with -100).")
+            await message.reply("❌ **Invalid ID!** Please send a numeric ID starting with -100.")
 
-# --- ADMIN & UTILITY COMMANDS ---
+# --- UTILITY & ADMIN COMMANDS ---
 
 @Client.on_message(filters.command("delete_clone") & filters.private)
 async def delete_clone_handler(client, message):
@@ -114,7 +124,7 @@ async def delete_clone_handler(client, message):
     if not clone:
         return await message.reply("❌ You don't have an active clone bot.")
 
-    msg = await message.reply("🗑️ **Shutting down your bot...**")
+    msg = await message.reply("🗑️ **Shutting down...**")
     try:
         await stop_clone(user_id)
         await clones_col.delete_one({"user_id": user_id})
